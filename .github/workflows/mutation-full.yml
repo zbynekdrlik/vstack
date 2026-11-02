@@ -17,13 +17,14 @@ concurrency:
 
 jobs:
   shard:
-    name: Mutants shard ${{ matrix.shard }}/8
+    name: Mutants shard ${{ matrix.shard }} of 0-7
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        # cargo-mutants numbers shards from 0: --shard k/n needs k < n.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -36,15 +37,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants,cargo-nextest
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: mutants-full
-      # cargo-mutants exits 2 for missed mutants and 3 for timeouts: findings, filed below. Any
-      # other non-zero exit is a tooling failure and fails the shard.
-      - name: Mutate shard ${{ matrix.shard }}/8
+      # The baseline runs first: a ref whose tests already fail exits 4 here, never a vacuous pass.
+      # Exit 2 = mutants missed; 3 = a mutant timed out (also when others were missed). Both are
+      # findings, filed below. Any other non-zero exit is a tooling failure and fails the shard.
+      - name: Mutate shard ${{ matrix.shard }} of 0-7
         run: |
           set -uo pipefail
-          cargo mutants --shard ${{ matrix.shard }}/8 --baseline=skip --timeout 120 --jobs 2 --all-features -- --all-targets
+          cargo mutants --shard ${{ matrix.shard }}/8 --timeout 120 --jobs 2 --all-features -- --all-targets
           rc=$?
           case "$rc" in
             0|2|3) echo "cargo-mutants exit $rc" ;;
@@ -62,6 +61,8 @@ jobs:
   file:
     name: File missed mutants
     needs: [shard]
+    # A failed shard keeps the run red but does not stop the other shards' findings being filed.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

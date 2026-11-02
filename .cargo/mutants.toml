@@ -3,8 +3,12 @@
 profile = "mutants"
 test_tool = "nextest"
 exclude_globs = ["jxs/sys/csrc/**"]
+# cargo-mutants builds in copies of the tree with a cold target dir, so no CI cache step helps it.
 
 # Equivalent mutants: at corr == +MAX_SLEW_NS the clamp returns stock + MAX_SLEW_NS, which is
 # target; at corr == -MAX_SLEW_NS it returns stock - MAX_SLEW_NS, also target. Moving either
 # boundary by one changes no output, so no test can catch them.
-exclude_re = ["replace > with >= in deadline_ns", "replace < with <= in deadline_ns"]
+exclude_re = [
+  '^rig/core/src/genlock_wall_step\.rs:[0-9]+:[0-9]+: replace > with >= in deadline_ns$',
+  '^rig/core/src/genlock_wall_step\.rs:[0-9]+:[0-9]+: replace < with <= in deadline_ns$',
+]

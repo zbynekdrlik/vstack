@@ -126,9 +126,6 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants,cargo-nextest
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: mutants
       - name: Diff to mutate
         run: |
           set -euo pipefail
