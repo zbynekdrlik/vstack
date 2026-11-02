@@ -24,7 +24,7 @@ Direction: vstack, then obs and the cambox app, then camera-box as orchestrator.
 
 `cargo nextest run --workspace --all-features` (or `cargo test`). Needs `cmake`, `nasm` and a C compiler for `jxs/sys`.
 
-Mutation testing (vstack#6): CI's `Mutation Testing (diff)` mutates the lines a change touches, in 4 shards that each keep the 20 min cap, and fails on a missed mutant. Run it locally with `git diff origin/main...HEAD > /path/change.diff && cargo mutants --in-diff /path/change.diff --all-features -- --all-targets`. `.cargo/mutants.toml` holds the config and the equivalent-mutant excludes, each with its reason. The whole tree (about 3700 mutants) is mutated only on demand: `gh workflow run mutation-full.yml`, which files the missed mutants as one `test-quality` issue.
+Mutation testing (vstack#6): CI's `Mutation Testing (diff)` mutates the lines a change touches, in 4 shards that each keep the 20 min cap, and fails on a missed mutant. Run it locally with `git diff origin/main...HEAD > /path/change.diff && cargo mutants --in-diff /path/change.diff --all-features -- --all-targets`. `.cargo/mutants.toml` holds the config and the equivalent-mutant excludes, each with its reason. The whole tree (about 4000 mutants) is mutated only on demand: `gh workflow run mutation-full.yml`, which files the missed mutants as one `test-quality` issue.
 
 The root `[profile.release]` (LTO, one codegen unit, strip) is the profile of the FFI archive that camera-box and obs build in a vstack checkout. Cargo ignores it when an app pulls vstack in as a git dependency.
 
