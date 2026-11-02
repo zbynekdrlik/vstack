@@ -4,4 +4,4 @@ Shared video libraries. Start with `docs/HANDOVER.md`.
 
 ## Playbook router
 
-- No area rules yet.
+- CI, mutation testing, profiles → `.claude/rules/ci-mutants.md` (auto-loads on its `paths:`)
