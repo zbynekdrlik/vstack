@@ -2,7 +2,7 @@
 //!
 //! [`scan_markers`] is the ONE demod: [`crate::qpsk_marker::decode_markers_with_stats`] (the
 //! offline `recording-verdict --av-sync`, the `[4b3/8]` probe, the fused A/V gate) scans a whole
-//! buffer from 0, and the live dock's [`crate::av_sync_dock::StreamingMarkerDecoder`] scans only
+//! buffer from 0, and camera-box's live dock (`av_sync_dock::StreamingMarkerDecoder`) scans only
 //! the positions of its rolling window that are not final yet. Mirrored byte-for-byte by
 //! `cb_scan_markers` in `vendor/av-sync-dock/src/camera-box-marker-scan.hpp`.
 //!
@@ -12,7 +12,7 @@
 //! decoded marker and every counter of a batch decode (a scan from 0) is unchanged
 //! (`tests/qpsk_marker_scan_1381.rs` checks the scan against a frozen copy of the old kernel). The
 //! streaming decoder's markers match the old whole-window re-decode on every fixture tested; its
-//! counters changed meaning (see [`crate::av_sync_dock::StreamingMarkerDecoder`]).
+//! counters changed meaning (see camera-box's `av_sync_dock::StreamingMarkerDecoder`).
 
 use crate::qpsk_marker::{
     crc4_check, signal_len, AudioParams, DecodeStats, N_PAYLOAD_BITS, N_SYMBOLS, PREAMBLE_NIBBLE,
@@ -144,7 +144,7 @@ impl RefineWindow {
 
 /// Detect QPSK markers in mono f32 audio, screening positions from `start` on (issue 1381: the ONE
 /// kernel behind [`crate::qpsk_marker::decode_markers_with_stats`], which scans from 0, and the live dock's
-/// [`crate::av_sync_dock::StreamingMarkerDecoder`], which scans only the positions not final yet).
+/// camera-box's `av_sync_dock::StreamingMarkerDecoder`, which scans only the positions not final yet).
 ///
 /// The norihiro demod (`sync-test-output-audio.cpp::st_raw_audio_decode_data`): IQ-demodulate each symbol
 /// against the carrier (`Z = Σ signal·e^{-iθ}`, computed O(1) via prefix sums), derotate by the
