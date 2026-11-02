@@ -11,4 +11,17 @@ exclude_globs = ["jxs/sys/csrc/**"]
 exclude_re = [
   '^rig/core/src/genlock_wall_step\.rs:[0-9]+:[0-9]+: replace > with >= in deadline_ns$',
   '^rig/core/src/genlock_wall_step\.rs:[0-9]+:[0-9]+: replace < with <= in deadline_ns$',
+  # vstack#8: `ms > u32::MAX` saturates to u32::MAX; at ms == u32::MAX the cast gives the same
+  # u32::MAX, so `>=` changes no output.
+  '^rig/core/src/genlock_audio_pairing\.rs:[0-9]+:[0-9]+: replace > with >= in video_delay_round_ms$',
+  # vstack#8, genlock_audio_step_hold, pinned to line:col (the same functions have caught mutants).
+  # In audio_step_unmatched_follow the `&&` chain has already
+  # required stamp_jump_ns != 0 and unmatched_ns != 0, so `> 0` / `>= 0` and `< 0` / `<= 0` agree.
+  '^rig/core/src/genlock_audio_step_hold\.rs:543:27: replace > with >= in audio_step_unmatched_follow$',
+  '^rig/core/src/genlock_audio_step_hold\.rs:543:51: replace < with <= in audio_step_unmatched_follow$',
+  # In audio_relabel_pending a zero jump fails `jump > |step_min|`, whichever side whole_slot reads.
+  '^rig/core/src/genlock_audio_step_hold\.rs:455:39: replace > with >= in audio_relabel_pending$',
+  # In audio_step_hold's pending fold, dev_ns == 0 gives fold 0 on both sides: followed is 0, and the
+  # relabel-shaped fold needs `0 > |step_min|`.
+  '^rig/core/src/genlock_audio_step_hold\.rs:314:32: replace > with >= in audio_step_hold$',
 ]
