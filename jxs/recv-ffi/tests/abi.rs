@@ -306,12 +306,12 @@ fn link_into_shared_object(dir: &Path, flags: &[&str]) -> PathBuf {
     let mut args: Vec<&str> = vec!["-shared", "-fPIC", "-Wl,-z,defs"];
     args.extend_from_slice(flags);
     args.extend_from_slice(&[&inc, &send_inc, src.to_str().unwrap(), a.to_str().unwrap()]);
-    // the list `rustc --print native-static-libs` prints for this crate
+    // the list `rustc --print native-static-libs` prints for this crate (no libasound since
+    // issue 1487: the archive no longer carries the camera-box appliance)
     args.extend_from_slice(&[
         "-lpthread",
         "-lm",
         "-ldl",
-        "-lasound",
         "-lgcc_s",
         "-lutil",
         "-lrt",
