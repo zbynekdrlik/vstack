@@ -90,8 +90,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: coverage
+      # Lines measured 93.39% on the first run (41440116096); the gate holds that floor.
       - name: Coverage (fails under the threshold)
-        run: cargo llvm-cov nextest --locked --workspace --all-features --fail-under-lines ${{ vars.COVERAGE_THRESHOLD || '70' }}
+        run: cargo llvm-cov nextest --locked --workspace --all-features --fail-under-lines ${{ vars.COVERAGE_THRESHOLD || '93' }}
 
   version-rules:
     name: Release version rules (script tests)
