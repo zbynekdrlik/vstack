@@ -279,7 +279,7 @@ pub fn phase_pinned_deadline(raw_deadline_ns: u64, interval_ns: u64) -> u64 {
 
 /// #940 piece 3 — the hysteresis SLACK added to [`phase_pinned_deadline`]'s output before
 /// the `due` comparison. Sized well below one frame interval at ANY rig fps (33.3 ms @
-/// 30 fps, 16.6 ms @ 60 fps — see [`phase_pin_hysteresis_is_a_small_fraction_of_any_rig_frame_interval_940`]),
+/// 30 fps, 16.6 ms @ 60 fps — see the test `phase_pin_hysteresis_is_a_small_fraction_of_any_rig_frame_interval_940`),
 /// so it can never pull in an extra frame; it exists ONLY to stop a frame captured
 /// essentially exactly on a grid line from flipping due/not-due tick to tick because of
 /// ordinary sub-ms render-tick slew on the floor division above — the same shape of guard

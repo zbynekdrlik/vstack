@@ -8,6 +8,10 @@ paths:
 # CI and mutation testing (vstack#6)
 
 - `cargo mutants --shard k/n` counts from 0: k runs 0..n-1, and `n/n` exits 1.
+- The diff gate runs 4 shards (`mutants-shard`) and one gathering job named `Mutation Testing (diff)`,
+  the required check. Before a large move, run the gate locally on the batch diff: a moved module
+  often has mutants only camera-box's parity tests (which stay there) killed. Kill them with unit
+  tests in vstack, or split the batch across tags. Never lower the cap.
 - A missed mutant that no test can catch is excluded in `.cargo/mutants.toml` with an anchored
   `exclude_re` (`^path:[0-9]+:[0-9]+: replace … in fn$`) and a comment proving it is equivalent.
   Otherwise write the test.
