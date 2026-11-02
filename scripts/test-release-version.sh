@@ -21,6 +21,8 @@ printf '[workspace.package]\n  version = \x272.0.1\x27\n' > "$tmp/quoted.toml"
 expect 0 "2.0.1" read "$tmp/quoted.toml"
 printf '[workspace]\nmembers = []\n\n[package]\nversion = "3.0.0"\n' > "$tmp/none.toml"
 expect 1 "" read "$tmp/none.toml"
+printf '  [workspace.package]\nversion = "4.5.6" # the release\n' > "$tmp/indented.toml"
+expect 0 "4.5.6" read "$tmp/indented.toml"
 expect 0 "" dev-check 0.1.0 ""
 expect 0 "" dev-check 0.1.1 0.1.0
 expect 0 "" dev-check 0.10.0 0.9.0
@@ -30,5 +32,6 @@ expect 1 "" dev-check 0.1.0-rc1 0.0.9
 expect 0 "CREATE" tag-decision 0.1.0 "" abc
 expect 0 "EXISTS" tag-decision 0.1.0 abc abc
 expect 1 "" tag-decision 0.1.0 def abc
+expect 1 "" tag-decision 0.1 "" abc
 [ "$fails" -eq 0 ] || { echo "$fails failure(s)"; exit 1; }
 echo "all release-version tests passed"

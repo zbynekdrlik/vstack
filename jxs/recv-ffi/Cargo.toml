@@ -1,9 +1,9 @@
 [package]
 name = "jxs-recv-ffi"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 description = "Issue 1387 slice 2: a C ABI static library over camera-box's JPEG XS receiver (jxs_recv::JxsReceiver), linked into the strih DistroAV build"
-license = "MIT"
+license.workspace = true
 publish = false
 
 [lib]

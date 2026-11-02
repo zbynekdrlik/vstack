@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned so a new stable lint never turns dev red without a commit. Bump it by commit.
+  RUST_TOOLCHAIN: "1.99.1"
 
 # A dev run is cancelled by a newer push; a main run never is (it tags the release).
 concurrency:
@@ -18,10 +20,12 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
       # nasm: jxs/sys/build.rs builds the vendored SVT-JPEG-XS (cmake ships on the runner).
       - name: Install dependencies
@@ -45,7 +49,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -80,8 +86,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: llvm-tools-preview
       - name: Install dependencies
         run: |
@@ -97,9 +104,30 @@ jobs:
       - name: Coverage (fails under the threshold)
         run: cargo llvm-cov nextest --locked --workspace --all-features --fail-under-lines 93
 
+  fresh-deps:
+    name: Build with fresh dependencies (as an app resolves them)
+    # An app that pins a vstack tag ignores this Cargo.lock and resolves the newest compatible
+    # crates. This job does the same, so a breaking compatible release shows up here first.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+      - name: Resolve the newest compatible dependencies
+        run: cargo update
+      - name: Check every crate and target
+        run: cargo check --workspace --all-targets --all-features
+
   version-rules:
     name: Release version rules (script tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - run: scripts/test-release-version.sh
@@ -108,6 +136,7 @@ jobs:
     name: Version is above main (dev only)
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: dev version > main version
@@ -129,9 +158,10 @@ jobs:
     # Apps pin vstack by this tag. Idempotent on a re-run; a tag never moves to another commit.
     # A main commit whose version already has a tag on another commit fails red on purpose: the
     # dev version-check should have caught the missing bump.
-    needs: [lint, test, coverage, version-rules]
+    needs: [lint, test, coverage, fresh-deps, version-rules]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
     steps:
@@ -144,6 +174,11 @@ jobs:
           [ -n "$tag_sha" ] || tag_sha="$(git ls-remote origin "refs/tags/v${ver}" | awk '{print $1}')"
           echo "version ${ver}, tag v${ver} -> ${tag_sha:-<none>}, head ${GITHUB_SHA}"
           decision="$(scripts/release-version.sh tag-decision "$ver" "$tag_sha" "$GITHUB_SHA")"
+          if [ "$decision" = CREATE ]; then
+            # A new tag must be above every existing release, even if dev's check was bypassed.
+            newest="$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed -E 's|.*refs/tags/v||' | sort -V | tail -1)"
+            scripts/release-version.sh dev-check "$ver" "$newest"
+          fi
           case "$decision" in
             CREATE)
               git tag "v${ver}" "$GITHUB_SHA"

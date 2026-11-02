@@ -1,9 +1,9 @@
 [package]
 name = "rig-core"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 description = "The rig primitives camera-box and the JPEG XS link share: the per-second genlock grid (the Rust authority of the vendored C header), thread affinity + realtime, the IRQ offload decision, the CAM<N> hostname parser"
-license = "MIT"
+license.workspace = true
 publish = false
 
 [lib]

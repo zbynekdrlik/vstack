@@ -1,9 +1,9 @@
 [package]
 name = "qpsk-marker"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 description = "The QPSK audio-marker protocol of the A/V-sync marker (camera-box #188/#145) and its demod kernel (camera-box #1381): pure std, no I/O"
-license = "MIT"
+license.workspace = true
 publish = false
 
 [lib]
