@@ -841,6 +841,12 @@ fn inside_a_pending_a_forward_move_of_a_whole_slot_folds_only_when_relabel_shape
         next(&mut s, OFF, slot, late, MIN),
         (held, AudioStepRelease::None)
     );
+    // the same slot on time: relabel-shaped, folded
+    let mut on_time = pending(held);
+    assert_eq!(
+        next(&mut on_time, OFF, slot, PACKET, MIN),
+        (held - slot, AudioStepRelease::None)
+    );
     // under one slot: folds like the skew hold's, whatever its arrival
     let mut under = pending(held);
     assert_eq!(

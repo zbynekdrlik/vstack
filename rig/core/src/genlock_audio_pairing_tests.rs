@@ -902,7 +902,7 @@ fn the_applied_delay_is_the_hold_minus_the_slew_still_owed_1367() {
 }
 
 #[test]
-fn the_intended_landing_adds_every_ingest_term_to_the_raw_stamp_1367() {
+fn the_intended_landing_applies_every_ingest_term_to_the_raw_stamp_1367() {
     let raw = WALL;
     assert_eq!(
         audio_intended_raw_ns(raw, 7_000, -3_000, 500, 40_000_000),
