@@ -1,0 +1,164 @@
+name: CI
+
+# One run per commit: push to the two long-lived branches, no pull_request duplicate.
+on:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# A dev run is cancelled by a newer push; a main run never is (it tags the release).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # nasm: jxs/sys/build.rs builds the vendored SVT-JPEG-XS (cmake ships on the runner).
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy (all crates, all features)
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # camera-box-jxs without the codec: the build the OBS side and a non-Linux target see.
+      - name: Clippy (camera-box-jxs, no codec)
+        run: cargo clippy -p camera-box-jxs --all-targets --locked -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+      - uses: taiki-e/install-action@cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+      # Each crate on its own, as an app that pins one of them builds it.
+      - name: Run tests (svt-jpegxs-sys)
+        run: cargo nextest run --locked -p svt-jpegxs-sys
+      - name: Run tests (rig-core)
+        run: cargo nextest run --locked -p rig-core --all-features
+      - name: Run tests (camera-box-jxs, no codec)
+        run: cargo nextest run --locked -p camera-box-jxs
+      - name: Run tests (camera-box-jxs, codec)
+        run: cargo nextest run --locked -p camera-box-jxs --all-features
+      # The C ABI pinned against its header by the C compiler, the static library linked into a
+      # -z defs shared object, and the real-codec loopback through it.
+      - name: Run tests (jxs-recv-ffi)
+        run: cargo nextest run --locked -p jxs-recv-ffi
+      - name: Run tests (jxs-send-ffi)
+        run: cargo nextest run --locked -p jxs-send-ffi
+      - name: Run doctests
+        run: cargo test --locked --workspace --all-features --doc
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      # Lines measured 93.39% on the first run (41440116096); the gate holds that floor and moves
+      # only by a commit.
+      - name: Coverage (fails under the threshold)
+        run: cargo llvm-cov nextest --locked --workspace --all-features --fail-under-lines 93
+
+  version-rules:
+    name: Release version rules (script tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/test-release-version.sh
+
+  version-check:
+    name: Version is above main (dev only)
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: dev version > main version
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin main
+          dev="$(scripts/release-version.sh read Cargo.toml)"
+          # Only a main with no Cargo.toml at all is a first release; a main Cargo.toml without a
+          # readable version fails here (read exits 1).
+          main=""
+          if git cat-file -e FETCH_HEAD:Cargo.toml 2>/dev/null; then
+            git show FETCH_HEAD:Cargo.toml > "$RUNNER_TEMP/main-Cargo.toml"
+            main="$(scripts/release-version.sh read "$RUNNER_TEMP/main-Cargo.toml")"
+          fi
+          scripts/release-version.sh dev-check "$dev" "$main"
+
+  release-tag:
+    name: Tag the release vX.Y.Z (main only)
+    # Apps pin vstack by this tag. Idempotent on a re-run; a tag never moves to another commit.
+    # A main commit whose version already has a tag on another commit fails red on purpose: the
+    # dev version-check should have caught the missing bump.
+    needs: [lint, test, coverage, version-rules]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag the merge commit
+        run: |
+          set -euo pipefail
+          ver="$(scripts/release-version.sh read Cargo.toml)"
+          tag_sha="$(git ls-remote origin "refs/tags/v${ver}^{}" | awk '{print $1}')"
+          [ -n "$tag_sha" ] || tag_sha="$(git ls-remote origin "refs/tags/v${ver}" | awk '{print $1}')"
+          echo "version ${ver}, tag v${ver} -> ${tag_sha:-<none>}, head ${GITHUB_SHA}"
+          decision="$(scripts/release-version.sh tag-decision "$ver" "$tag_sha" "$GITHUB_SHA")"
+          case "$decision" in
+            CREATE)
+              git tag "v${ver}" "$GITHUB_SHA"
+              if git push origin "refs/tags/v${ver}"; then
+                echo "pushed tag v${ver} on ${GITHUB_SHA}"
+              else
+                # Another run may have pushed the same tag first: fine only if it names this commit.
+                now="$(git ls-remote origin "refs/tags/v${ver}" | awk '{print $1}')"
+                if [ "$now" = "$GITHUB_SHA" ]; then
+                  echo "tag v${ver} was pushed by another run on ${GITHUB_SHA}"
+                else
+                  echo "::error::tag push refused; v${ver} names ${now:-<none>}, not ${GITHUB_SHA}"
+                  exit 1
+                fi
+              fi
+              ;;
+            EXISTS)
+              echo "tag v${ver} already names ${GITHUB_SHA}"
+              ;;
+          esac

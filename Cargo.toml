@@ -1,0 +1,9 @@
+# vstack: the shared Rust libraries for video switching and camboxes (split from camera-box,
+# airuleset issue 1280, camera-box issue 1487). Apps pin a vstack tag (`vX.Y.Z`) as a git
+# dependency; every member inherits the one version below, so a tag names one version of all.
+[workspace]
+members = ["jxs/sys", "jxs/link", "jxs/recv-ffi", "jxs/send-ffi", "rig/core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
