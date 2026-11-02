@@ -104,6 +104,45 @@ jobs:
       - name: Coverage (fails under the threshold)
         run: cargo llvm-cov nextest --locked --workspace --all-features --fail-under-lines 93
 
+  mutants:
+    name: Mutation Testing (diff)
+    # Issue 6: camera-box no longer mutates these crates; vstack does, on the lines a change
+    # touches. dev: everything not yet on main. main: the merge itself (first parent = old main).
+    # The whole tree is mutated only on demand, by mutation-full.yml.
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - name: Diff to mutate
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" = refs/heads/main ]; then base=HEAD^1; else base=origin/main; fi
+          git diff "$base"...HEAD > "$RUNNER_TEMP/change.diff"
+          echo "mutating the diff against $base: $(wc -l < "$RUNNER_TEMP/change.diff") lines"
+      # --baseline=skip: the test job already proved the unmutated tree green. The config in
+      # .cargo/mutants.toml picks the mutants profile, nextest and the excludes.
+      - name: Mutation testing (fails on a missed mutant)
+        run: cargo mutants --in-diff "$RUNNER_TEMP/change.diff" --baseline=skip --timeout 120 --jobs 2 --all-features -- --all-targets
+      - name: Upload the mutants report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out
+
   fresh-deps:
     name: Build with fresh dependencies (as an app resolves them)
     # An app that pins a vstack tag ignores this Cargo.lock and resolves the newest compatible
@@ -158,7 +197,7 @@ jobs:
     # Apps pin vstack by this tag. Idempotent on a re-run; a tag never moves to another commit.
     # A main commit whose version already has a tag on another commit fails red on purpose: the
     # dev version-check should have caught the missing bump.
-    needs: [lint, test, coverage, fresh-deps, version-rules]
+    needs: [lint, test, coverage, mutants, fresh-deps, version-rules]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5

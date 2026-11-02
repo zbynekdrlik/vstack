@@ -308,4 +308,23 @@ mod tests {
             stock - 17_600_000
         );
     }
+
+    // Issue 6 (vstack mutation gate): the two boundaries the moved suite left open.
+    #[test]
+    fn a_zero_width_bracket_is_trusted() {
+        assert_eq!(
+            wall_offset_ns(MONO0, WALL0, MONO0),
+            Some((WALL0 - MONO0) as i64)
+        );
+    }
+
+    #[test]
+    fn a_regrid_exactly_one_clamp_away_is_not_left_pending() {
+        let stock = MONO0;
+        let mut s = WallStepState::default();
+        assert!(s.regrid_due(1, stock + MAX_SLEW_NS as u64, stock));
+        assert!(!s.regrid_pending());
+        assert!(s.regrid_due(1, stock + MAX_SLEW_NS as u64 + 1, stock));
+        assert!(s.regrid_pending());
+    }
 }

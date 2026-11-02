@@ -3,3 +3,5 @@ target/
 TARGETS.md
 *.pem
 *.key
+mutants.out/
+mutants.out.old/

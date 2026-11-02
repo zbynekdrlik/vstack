@@ -6,7 +6,7 @@ vstack holds the shared Rust libraries for video switching and camboxes, on the 
 
 Imported: `jxs/link` (crate `camera-box-jxs`), `jxs/sys`, `jxs/recv-ffi`, `jxs/send-ffi`, `vendor/svt-jpeg-xs`, `rig/core` (crate `rig-core`). From camera-box 3d06cb46f8 on camera-box's request (vstack#1): `genlock_backlog`, `genlock_n1_depth`, `genlock_wall_step` in `rig/core`; `qpsk_marker`, `qpsk_marker_scan` in `av/marker` (crate `qpsk-marker`).
 
-The root `Cargo.toml` is the workspace; every crate inherits its one version. Tags: `git ls-remote --tags origin` (v0.1.0 the import, v0.1.1 camera-box's modules). The parity gates against the C mirrors stay in the apps that carry the C code; they test these crates.
+The root `Cargo.toml` is the workspace; every crate inherits its one version. Tags: `git ls-remote --tags origin` (v0.1.0 the import, v0.1.1 camera-box's modules, v0.1.2 CI hardening, v0.1.3 doc wording, v0.1.4 mutation gate and release profile, vstack#6). The parity gates against the C mirrors stay in the apps that carry the C code; they test these crates.
 
 The clock stays with dsync. No clock code goes here. `rig/core` carries the genlock grid authority that the OBS C code mirrors.
 
@@ -23,6 +23,10 @@ Direction: vstack, then obs and the cambox app, then camera-box as orchestrator.
 ## How to run a test
 
 `cargo nextest run --workspace --all-features` (or `cargo test`). Needs `cmake`, `nasm` and a C compiler for `jxs/sys`.
+
+Mutation testing (vstack#6): CI's `Mutation Testing (diff)` mutates the lines a change touches and fails on a missed mutant. Run it locally with `git diff origin/main...HEAD > /path/change.diff && cargo mutants --in-diff /path/change.diff --all-features -- --all-targets`. `.cargo/mutants.toml` holds the config and the equivalent-mutant excludes, each with its reason. The whole tree (about 3700 mutants) is mutated only on demand: `gh workflow run mutation-full.yml`, which files the missed mutants as one `test-quality` issue.
+
+The root `[profile.release]` (LTO, one codegen unit, strip) is the profile of the FFI archive that camera-box and obs build in a vstack checkout. Cargo ignores it when an app pulls vstack in as a git dependency.
 
 ## Site facts
 
