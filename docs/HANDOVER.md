@@ -34,7 +34,7 @@ None registered. CI runs on GitHub-hosted `ubuntu-latest` (`.github/workflows/ci
 
 ## Releases
 
-Bump `[workspace.package] version` on dev first (CI fails dev if it is not above main). A green main run tags `vX.Y.Z`; a tag never moves. Then tell camera-box and obs the tag by peer.
+Bump `[workspace.package] version` on dev first, then `cargo update -w` so `Cargo.lock` carries it (CI builds `--locked`, and fails dev if the version is not above main). A green main run tags `vX.Y.Z`; a tag never moves. Then tell camera-box and obs the tag by peer.
 
 ## Backlog
 
