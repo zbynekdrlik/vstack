@@ -1,0 +1,10 @@
+# cargo-mutants config (issue 6). Each mutant is tested by its own crate's tests only: the default,
+# never test_workspace = true. The vendored C codec is not Rust and is never mutated.
+profile = "mutants"
+test_tool = "nextest"
+exclude_globs = ["jxs/sys/csrc/**"]
+
+# Equivalent mutants: at corr == +MAX_SLEW_NS the clamp returns stock + MAX_SLEW_NS, which is
+# target; at corr == -MAX_SLEW_NS it returns stock - MAX_SLEW_NS, also target. Moving either
+# boundary by one changes no output, so no test can catch them.
+exclude_re = ["replace > with >= in deadline_ns", "replace < with <= in deadline_ns"]

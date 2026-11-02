@@ -9,3 +9,16 @@ resolver = "2"
 version = "0.1.4"
 edition = "2021"
 license = "MIT"
+
+# The FFI archive (libjxs_recv_ffi.a) is built in a vstack checkout by camera-box and obs, so this
+# profile is the one both get. Cargo reads profiles only from the workspace root: an app that pulls
+# vstack in as a git dependency builds it with that app's own profile.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# cargo-mutants builds every mutant with this profile: no debug info, so each rebuild is short.
+[profile.mutants]
+inherits = "test"
+debug = "none"
