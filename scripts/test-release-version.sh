@@ -17,6 +17,10 @@ expect() { # expect <want-exit> <want-stdout-or-empty> <args...>
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 printf '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "1.2.3"\n\n[x]\nversion = "9.9.9"\n' > "$tmp/Cargo.toml"
 expect 0 "1.2.3" read "$tmp/Cargo.toml"
+printf '[workspace.package]\n  version = \x272.0.1\x27\n' > "$tmp/quoted.toml"
+expect 0 "2.0.1" read "$tmp/quoted.toml"
+printf '[workspace]\nmembers = []\n\n[package]\nversion = "3.0.0"\n' > "$tmp/none.toml"
+expect 1 "" read "$tmp/none.toml"
 expect 0 "" dev-check 0.1.0 ""
 expect 0 "" dev-check 0.1.1 0.1.0
 expect 0 "" dev-check 0.10.0 0.9.0

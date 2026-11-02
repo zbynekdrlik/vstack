@@ -90,9 +90,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: coverage
-      # Lines measured 93.39% on the first run (41440116096); the gate holds that floor.
+      # Lines measured 93.39% on the first run (41440116096); the gate holds that floor and moves
+      # only by a commit.
       - name: Coverage (fails under the threshold)
-        run: cargo llvm-cov nextest --locked --workspace --all-features --fail-under-lines ${{ vars.COVERAGE_THRESHOLD || '93' }}
+        run: cargo llvm-cov nextest --locked --workspace --all-features --fail-under-lines 93
 
   version-rules:
     name: Release version rules (script tests)
@@ -112,6 +113,8 @@ jobs:
           set -euo pipefail
           git fetch --depth=1 origin main
           dev="$(scripts/release-version.sh read Cargo.toml)"
+          # Only a main with no Cargo.toml at all is a first release; a main Cargo.toml without a
+          # readable version fails here (read exits 1).
           main=""
           if git cat-file -e FETCH_HEAD:Cargo.toml 2>/dev/null; then
             git show FETCH_HEAD:Cargo.toml > "$RUNNER_TEMP/main-Cargo.toml"
@@ -122,6 +125,8 @@ jobs:
   release-tag:
     name: Tag the release vX.Y.Z (main only)
     # Apps pin vstack by this tag. Idempotent on a re-run; a tag never moves to another commit.
+    # A main commit whose version already has a tag on another commit fails red on purpose: the
+    # dev version-check should have caught the missing bump.
     needs: [lint, test, coverage, version-rules]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -140,8 +145,18 @@ jobs:
           case "$decision" in
             CREATE)
               git tag "v${ver}" "$GITHUB_SHA"
-              git push origin "refs/tags/v${ver}"
-              echo "pushed tag v${ver} on ${GITHUB_SHA}"
+              if git push origin "refs/tags/v${ver}"; then
+                echo "pushed tag v${ver} on ${GITHUB_SHA}"
+              else
+                # Another run may have pushed the same tag first: fine only if it names this commit.
+                now="$(git ls-remote origin "refs/tags/v${ver}" | awk '{print $1}')"
+                if [ "$now" = "$GITHUB_SHA" ]; then
+                  echo "tag v${ver} was pushed by another run on ${GITHUB_SHA}"
+                else
+                  echo "::error::tag push refused; v${ver} names ${now:-<none>}, not ${GITHUB_SHA}"
+                  exit 1
+                fi
+              fi
               ;;
             EXISTS)
               echo "tag v${ver} already names ${GITHUB_SHA}"
