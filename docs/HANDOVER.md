@@ -6,7 +6,7 @@ vstack holds the shared Rust libraries for video switching and camboxes, on the 
 
 Imported: `jxs/link` (crate `camera-box-jxs`), `jxs/sys`, `jxs/recv-ffi`, `jxs/send-ffi`, `vendor/svt-jpeg-xs`, `rig/core` (crate `rig-core`). From camera-box 3d06cb46f8 on camera-box's request (vstack#1): `genlock_backlog`, `genlock_n1_depth`, `genlock_wall_step` in `rig/core`; `qpsk_marker`, `qpsk_marker_scan` in `av/marker` (crate `qpsk-marker`).
 
-The root `Cargo.toml` is the workspace; every crate inherits its one version. Tags: v0.1.0 (the import). The parity gates against the C mirrors stay in the apps that carry the C code; they test these crates.
+The root `Cargo.toml` is the workspace; every crate inherits its one version. Tags: `git ls-remote --tags origin` (v0.1.0 the import, v0.1.1 camera-box's modules). The parity gates against the C mirrors stay in the apps that carry the C code; they test these crates.
 
 The clock stays with dsync. No clock code goes here. `rig/core` carries the genlock grid authority that the OBS C code mirrors.
 

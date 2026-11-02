@@ -1,9 +1,9 @@
 [package]
 name = "jxs-send-ffi"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 description = "Issue 1387 slice 3: a C ABI over camera-box's JPEG XS sender (jxs_send::JxsHandoff), carried into the strih DistroAV build inside the jxs-recv-ffi static library"
-license = "MIT"
+license.workspace = true
 publish = false
 
 [lib]
