@@ -59,6 +59,8 @@ jobs:
         run: cargo nextest run --locked -p svt-jpegxs-sys
       - name: Run tests (rig-core)
         run: cargo nextest run --locked -p rig-core --all-features
+      - name: Run tests (qpsk-marker)
+        run: cargo nextest run --locked -p qpsk-marker
       - name: Run tests (camera-box-jxs, no codec)
         run: cargo nextest run --locked -p camera-box-jxs
       - name: Run tests (camera-box-jxs, codec)

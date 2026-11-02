@@ -4,9 +4,9 @@
 
 vstack holds the shared Rust libraries for video switching and camboxes, on the model of dstack. It owns its code and releases, and apps pin its tags. It split from `zbynekdrlik/camera-box` main 3d06cb46f8 with history, under ticket airuleset#1280. The owner decided this on 2026-11-02 (camera-box#1487).
 
-Imported: `jxs/link` (crate `camera-box-jxs`), `jxs/sys`, `jxs/recv-ffi`, `jxs/send-ffi`, `vendor/svt-jpeg-xs`, `rig/core` (crate `rig-core`). Nothing else yet.
+Imported: `jxs/link` (crate `camera-box-jxs`), `jxs/sys`, `jxs/recv-ffi`, `jxs/send-ffi`, `vendor/svt-jpeg-xs`, `rig/core` (crate `rig-core`). From camera-box 3d06cb46f8 on camera-box's request (vstack#1): `genlock_backlog`, `genlock_n1_depth`, `genlock_wall_step` in `rig/core`; `qpsk_marker`, `qpsk_marker_scan` in `av/marker` (crate `qpsk-marker`).
 
-The tree does not build yet: the workspace root stayed in camera-box. First work: add a workspace, CI and a tag, then tell camera-box and obs.
+The root `Cargo.toml` is the workspace; every crate inherits its one version. Tags: v0.1.0 (the import). The parity gates against the C mirrors stay in the apps that carry the C code; they test these crates.
 
 The clock stays with dsync. No clock code goes here. `rig/core` carries the genlock grid authority that the OBS C code mirrors.
 
@@ -22,7 +22,7 @@ Direction: vstack, then obs and the cambox app, then camera-box as orchestrator.
 
 ## How to run a test
 
-`cargo test` in the crates after the workspace exists.
+`cargo nextest run --workspace --all-features` (or `cargo test`). Needs `cmake`, `nasm` and a C compiler for `jxs/sys`.
 
 ## Site facts
 
@@ -30,7 +30,11 @@ Never commit a secret. Private facts go in `~/.config/vstack/`.
 
 ## Runners
 
-None registered. camera-box CI built this code before.
+None registered. CI runs on GitHub-hosted `ubuntu-latest` (`.github/workflows/ci.yml`).
+
+## Releases
+
+Bump `[workspace.package] version` on dev first (CI fails dev if it is not above main). A green main run tags `vX.Y.Z`; a tag never moves. Then tell camera-box and obs the tag by peer.
 
 ## Backlog
 
