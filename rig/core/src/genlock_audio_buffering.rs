@@ -483,4 +483,14 @@ mod tests {
             assert_eq!(frozen_plan(box_fixed, enc, settled), want);
         }
     }
+
+    #[test]
+    fn only_a_read_box_marker_marks_the_plan_box_fixed_1425() {
+        let fixed = plan_box(Some(85), 0, false, 48_000, AUDIO_OUTPUT_FRAMES);
+        assert!(fixed.box_fixed);
+        assert_eq!(fixed.floor_ticks, 4);
+        let shipped = plan_box(None, 0, false, 48_000, AUDIO_OUTPUT_FRAMES);
+        assert!(!shipped.box_fixed);
+        assert_eq!(shipped, plan(0, false, 48_000, AUDIO_OUTPUT_FRAMES));
+    }
 }

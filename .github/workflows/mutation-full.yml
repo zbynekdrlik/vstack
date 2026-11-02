@@ -36,7 +36,7 @@ jobs:
           sudo apt-get install -y nasm
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants,cargo-nextest
+          tool: cargo-mutants@27.1.0,cargo-nextest
       # The baseline runs first: a ref whose tests already fail exits 4 here, never a vacuous pass.
       # Exit 2 = mutants missed; 3 = a mutant timed out (also when others were missed). Both are
       # findings, filed below. Any other non-zero exit is a tooling failure and fails the shard.
