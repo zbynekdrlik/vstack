@@ -11,6 +11,13 @@ pub mod camera_number;
 // The genlock FIFO's backlog-storm threshold, made latency-relative (camera-box #859). The C
 // `GENLOCK_QDEPTH_RELOCK` in obs-source.c derives from here.
 pub mod genlock_backlog;
+// The receiver's audio placement against the video FIFO (camera-box #1303, #1367): audio at its NDI
+// timecode plus the video's measured stamp-to-present delay. The C `genlock_audio_*` in
+// obs-source.c mirrors it (vstack#8).
+pub mod genlock_audio_pairing;
+// The per-stream global audio buffering floor and band (camera-box #1367). C twin
+// `libobs/obs-genlock-audio-buffering.h` (vstack#8).
+pub mod genlock_audio_buffering;
 // The receive FIFO's relabel of old-epoch frames by the booked wall step (camera-box #1372). C twin
 // `libobs/obs-genlock-fifo-relabel.h` (vstack#8).
 pub mod genlock_fifo_relabel;

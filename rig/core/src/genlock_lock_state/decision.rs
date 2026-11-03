@@ -133,7 +133,7 @@ pub struct GenlockFacets {
     /// DEGRADE, never take a healthy box off LOCKED spuriously. The widget aggregates the
     /// per-source audio-parity condition into this one scalar — the same reduction it applies to
     /// the wall-step verdict for [`GenlockFacets::qpc_drift_beyond_bound`] — surfacing
-    /// the pairing-offset branch of `genlock_audio_pairing::decide_audio_health`.
+    /// the pairing-offset branch of [`crate::genlock_audio_pairing::decide_audio_health`].
     pub audio_unpaired: bool,
     /// #1303 — a genlock source is AUDIBLE when the certified per-box audio table
     /// (camera-box's `genlock_forced_table_audit`) expects it SILENT: a camera input on ANY box, or (once

@@ -12,8 +12,12 @@ paths:
   the required check. Before a large move, run the gate locally on the batch diff: a moved module
   often has mutants only camera-box's parity tests (which stay there) killed. Kill them with unit
   tests in vstack, or split the batch across tags. Never lower the cap.
+- CI pins `cargo-mutants@27.1.0`. Run the same version locally (`~/.local/bin/cargo-mutants`,
+  the release tarball): 25.x lacks mutant kinds such as "delete field … from struct expression",
+  so an older local run passes what CI fails. Bump the pin and the local copy together.
 - A missed mutant that no test can catch is excluded in `.cargo/mutants.toml` with an anchored
-  `exclude_re` (`^path:[0-9]+:[0-9]+: replace … in fn$`) and a comment proving it is equivalent.
+  `exclude_re` and a comment proving it is equivalent. Pin it to `line:col` when the same function
+  has caught mutants, and diff `--list` with and without `--no-config` to prove only it is gone.
   Otherwise write the test.
 - cargo-mutants builds in copies of the tree with a cold target dir: `Swatinem/rust-cache` does
   nothing in a mutants job.
