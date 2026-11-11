@@ -501,4 +501,62 @@ mod tests {
         };
         assert_eq!(bordered_origin(0, 5, corner, 27), (-27.0, -22.0));
     }
+
+    // vstack#8: the input guards, the band edge and the squaring.
+    #[test]
+    fn locate_burn_box_rejects_a_buffer_that_does_not_match_its_size() {
+        assert_eq!(locate_burn_box(&[], 0, 10, 200, 10), None);
+        assert_eq!(locate_burn_box(&[255; 110], 10, 10, 200, 10), None);
+        assert_eq!(locate_burn_box(&[255; 90], 10, 10, 200, 10), None);
+    }
+
+    #[test]
+    fn a_one_pixel_band_is_not_empty() {
+        // size_band(1) = (1, 1): lo == hi still accepts a 1 px box.
+        assert_eq!(size_band(1), (1, 1));
+        assert_eq!(
+            locate_burn_box(&[255], 1, 1, 200, 1),
+            Some(Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1
+            })
+        );
+    }
+
+    #[test]
+    fn a_box_with_one_side_outside_the_band_is_rejected() {
+        // Band for side 20 is [16, 21]. A 21 x 22 white box is within the squaring tolerance (1),
+        // so it is not cut, and its 22 px height is out of band.
+        assert_eq!(size_band(20), (16, 21));
+        let (w, h) = (30u32, 30u32);
+        let mut luma = vec![0u8; (w * h) as usize];
+        for y in 4..26 {
+            for x in 4..25 {
+                luma[(y * w + x) as usize] = 255;
+            }
+        }
+        assert_eq!(locate_burn_box(&luma, w, h, 200, 20), None);
+    }
+
+    #[test]
+    fn square_span_keeps_spans_within_a_twentieth_of_the_longer() {
+        let ok = vec![true; 64];
+        // 40 and 38: the tolerance is 40 / 20 = 2, so nothing is cut.
+        assert_eq!(
+            square_span((0, 39), (0, 37), &ok, &ok),
+            Some(((0, 39), (0, 37)))
+        );
+    }
+
+    #[test]
+    fn square_span_cuts_the_longer_span_from_its_start() {
+        let ok = vec![true; 64];
+        // 20 columns, 50 rows: the rows are cut to 20 lines anchored at the start.
+        assert_eq!(
+            square_span((0, 19), (0, 49), &ok, &ok),
+            Some(((0, 19), (0, 19)))
+        );
+    }
 }

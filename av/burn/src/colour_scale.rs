@@ -570,4 +570,103 @@ mod tests {
         // A 4K-tall frame gets a proportionally taller crop, not a fixed pixel count.
         assert_eq!(top_band_crop_height(2160, 0.67), 1447);
     }
+
+    // vstack#8: the half-open edges of Rect, which camera-box's probe tests reached.
+    #[test]
+    fn rects_that_touch_on_an_edge_do_not_intersect() {
+        let a = Rect {
+            x: 2,
+            y: 2,
+            w: 3,
+            h: 3,
+        }; // [2, 5) x [2, 5)
+        let right = Rect {
+            x: 5,
+            y: 2,
+            w: 3,
+            h: 3,
+        };
+        let below = Rect {
+            x: 2,
+            y: 5,
+            w: 3,
+            h: 3,
+        };
+        assert!(!a.intersects(&right));
+        assert!(!right.intersects(&a));
+        assert!(!below.intersects(&a));
+        assert!(!a.intersects(&below));
+        let one_px = Rect {
+            x: 4,
+            y: 4,
+            w: 3,
+            h: 3,
+        };
+        assert!(a.intersects(&one_px));
+        assert!(one_px.intersects(&a));
+    }
+
+    #[test]
+    fn contains_takes_the_first_pixel_and_not_the_end() {
+        let r = Rect {
+            x: 10,
+            y: 20,
+            w: 5,
+            h: 4,
+        };
+        assert!(r.contains(10, 20));
+        assert!(r.contains(14, 23));
+        assert!(!r.contains(15, 20));
+        assert!(!r.contains(9, 20));
+        assert!(!r.contains(10, 24));
+        assert!(!r.contains(10, 19));
+        assert!(!r.contains(14, 24));
+        assert!(!r.contains(15, 23));
+    }
+
+    #[test]
+    fn dual_qr_rects_place_each_half_and_clamp_the_top() {
+        let [l, r] = dual_qr_rects(1920, 1080, 700, 24).unwrap();
+        assert_eq!(
+            l,
+            Rect {
+                x: 130,
+                y: 24,
+                w: 700,
+                h: 700
+            }
+        );
+        assert_eq!(
+            r,
+            Rect {
+                x: 1090,
+                y: 24,
+                w: 700,
+                h: 700
+            }
+        );
+        // A top margin taller than the room under the QR is clamped to canvas_h - qh.
+        let [l, r] = dual_qr_rects(1920, 800, 700, 200).unwrap();
+        assert_eq!((l.y, r.y), (100, 100));
+    }
+
+    #[test]
+    fn dual_qr_rects_need_both_halves_and_a_height() {
+        // canvas_w 1: the left half is 0 px wide, the right half 1 px.
+        assert_eq!(dual_qr_rects(1, 1080, 700, 24), None);
+        // canvas_h 0: both halves have width but no height.
+        assert_eq!(dual_qr_rects(1920, 0, 700, 24), None);
+    }
+
+    #[test]
+    fn a_gap_no_wider_than_both_insets_paints_nothing() {
+        // An even canvas leaves a gap of canvas_w / 2 - qr_size between the halves.
+        let inset = COLUMN_INNER_MARGIN_PX;
+        let at = |gap: u32| colour_scale_patches(1000, 1080, 500 - gap, TOP_MARGIN_PX);
+        assert!(at(2 * inset).is_empty());
+        assert!(at(2 * inset - 5).is_empty());
+        let one = at(2 * inset + 1);
+        assert_eq!(one.len(), PATCH_COLOURS.len());
+        assert!(one.iter().all(|(r, _)| r.w == 1));
+    }
 }

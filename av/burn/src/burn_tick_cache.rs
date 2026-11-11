@@ -150,4 +150,13 @@ mod tests {
         assert_eq!(BurnTickCache::default(), BurnTickCache::new());
         assert!(!BurnTickCache::new().prepared_this_tick());
     }
+
+    #[test]
+    fn prepared_this_tick_reads_the_state_render_and_tick_set() {
+        let mut c = BurnTickCache::new();
+        assert!(c.on_render());
+        assert!(c.prepared_this_tick());
+        c.on_tick();
+        assert!(!c.prepared_this_tick());
+    }
 }

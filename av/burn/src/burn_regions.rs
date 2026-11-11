@@ -539,4 +539,48 @@ mod tests {
             vec![BurnSlot::BottomLeft]
         );
     }
+
+    // vstack#8: the corner side's clamps and the #1301 tier boundary.
+    #[test]
+    fn a_narrow_frame_clamps_the_corner_side_to_its_width() {
+        // 300 px wide at 1080: margin 40, so the side is 300 - 2 x 40.
+        assert_eq!(
+            slot_rect(BurnSlot::BottomLeft, 300, 1080),
+            Some(Rect {
+                x: 40,
+                y: 1040 - 220,
+                w: 220,
+                h: 220
+            })
+        );
+    }
+
+    #[test]
+    fn a_short_frame_clamps_the_corner_side_to_its_height() {
+        // 70 px high: margin 8 (the floor), so the side is 70 - 2 x 8, not the 64 px floor.
+        assert_eq!(
+            slot_rect(BurnSlot::BottomLeft, 1000, 70),
+            Some(Rect {
+                x: 8,
+                y: 8,
+                w: 54,
+                h: 54
+            })
+        );
+    }
+
+    #[test]
+    fn bottom_center_right_flush_tier_starts_exactly_one_side_plus_margin_in() {
+        // 684 x 1080: margin 40, side 302, so right_x = 342 = margin + side. That is not room for
+        // the one-margin tier, so the burn sits flush against BottomRight at x = 40.
+        assert_eq!(
+            slot_rect(BurnSlot::BottomCenterRight, 684, 1080).unwrap().x,
+            40
+        );
+        // One px wider and the one-margin tier fits: x = 343 - 40 - 302.
+        assert_eq!(
+            slot_rect(BurnSlot::BottomCenterRight, 685, 1080).unwrap().x,
+            1
+        );
+    }
 }
