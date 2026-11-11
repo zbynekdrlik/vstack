@@ -285,8 +285,8 @@ mod tests {
         // band_cy 720-26-100 = 594, top 594-100 = 494 (not 720-26-201 = 493).
         let r = slot_rect(BurnSlot::BottomLeft, 1280, 720).unwrap();
         assert_eq!(r, rect(26, 494, 201, 201));
-        // The square still ends at or above frame_h - margin + 1 and stays in frame.
-        assert!(r.y + r.h <= 720);
+        // The square ends at frame_h - margin + 1 (the odd px below band_cy + half), not lower.
+        assert_eq!(r.y + r.h, 720 - 26 + 1);
     }
 
     #[test]

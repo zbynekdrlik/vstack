@@ -271,33 +271,57 @@ mod tests {
     #[test]
     fn each_side_of_the_box_is_checked_against_the_band_on_its_own_1367() {
         let (w, h) = (336u32, 336u32);
-        // Tall bars at x 0 and 300 (w = 330, in band for 320), one wide bar at y 100 (h = 10).
-        let px = crop_with_bars(w, h, &[0, 300], &[100], 30);
+        // Each pair of spans differs by no more than a twentieth of the longer one, so squaring
+        // keeps both and only the band decides. 6 px bars; a span runs from the first bar's first
+        // line to the second bar's last.
+        // Slot 320 (band 256..336): w = 264 is in band, h = 255 one below it.
+        let px = crop_with_bars(w, h, &[0, 258], &[0, 249], 6);
         assert_eq!(
             locate_burn_box(&px, w, h, 188, 320),
             None,
             "h below the band"
         );
         // The transpose: w below the band.
-        let px = crop_with_bars(w, h, &[100], &[0, 300], 30);
+        let px = crop_with_bars(w, h, &[0, 249], &[0, 258], 6);
         assert_eq!(
             locate_burn_box(&px, w, h, 188, 320),
             None,
             "w below the band"
         );
-        // For a 302 px slot (band 242..317): w = 336 is above the band, h = 271 is inside it.
-        let px = crop_with_bars(w, h, &[0, 330], &[10, 275], 6);
+        // Slot 302 (band 242..317): w = 318 is one above the band, h = 303 is inside it.
+        let px = crop_with_bars(w, h, &[0, 312], &[0, 297], 6);
         assert_eq!(
             locate_burn_box(&px, w, h, 188, 302),
             None,
             "w above the band"
         );
         // The transpose: h above the band.
-        let px = crop_with_bars(w, h, &[10, 275], &[0, 330], 6);
+        let px = crop_with_bars(w, h, &[0, 297], &[0, 312], 6);
         assert_eq!(
             locate_burn_box(&px, w, h, 188, 302),
             None,
             "h above the band"
+        );
+        // One px back inside the band on each side: found, so the band alone rejected the above.
+        let px = crop_with_bars(w, h, &[0, 258], &[0, 250], 6);
+        assert_eq!(
+            locate_burn_box(&px, w, h, 188, 320),
+            Some(Rect {
+                x: 0,
+                y: 0,
+                w: 264,
+                h: 256
+            })
+        );
+        let px = crop_with_bars(w, h, &[0, 311], &[0, 297], 6);
+        assert_eq!(
+            locate_burn_box(&px, w, h, 188, 302),
+            Some(Rect {
+                x: 0,
+                y: 0,
+                w: 317,
+                h: 303
+            })
         );
         // Both sides in band: found.
         let px = crop_with_bars(w, h, &[10, 275], &[10, 275], 6);
