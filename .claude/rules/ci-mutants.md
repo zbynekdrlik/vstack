@@ -29,3 +29,9 @@ paths:
 - Root `[profile.*]` applies only to builds inside a vstack checkout (camera-box and obs build
   the FFI archive there). Cargo ignores it for an app that pulls vstack as a git dependency.
 - Each new required CI job: ask airuleset by peer to add it to the `main requires CI` ruleset.
+- A new workspace crate gets its own `cargo nextest run --locked -p <crate>` step in the `Test`
+  job (each crate is tested alone, as an app that pins it builds it). The coverage job's
+  `--workspace` run does not replace it.
+- A moved test can pass for the wrong reason. When a test asserts `None` from a function with
+  several early returns, check which return fires. vstack#8 batch 3 found a band test that
+  `square_span` rejected before the band check ran.
