@@ -24,4 +24,10 @@ exclude_re = [
   # In audio_step_hold's pending fold, dev_ns == 0 gives fold 0 on both sides: followed is 0, and the
   # relabel-shaped fold needs `0 > |step_min|`.
   '^rig/core/src/genlock_audio_step_hold\.rs:314:32: replace > with >= in audio_step_hold$',
+  # vstack#8 batch 3, burn-geom, pinned to line:col. In slot_rect, side <= max_h = frame_h - 2 x margin
+  # whenever frame_h > 2 x margin, so margin + side / 2 < frame_h and the two never meet. Otherwise
+  # side is 1, half 0, and at frame_h == margin both branches give band_cy 0.
+  '^av/burn/src/burn_regions\.rs:164:30: replace > with >= in slot_rect$',
+  # In square_span, sh == sw has abs_diff 0 <= tol and has already returned, so `>=` reads no new case.
+  '^av/burn/src/burn_quiet_zone\.rs:197:11: replace > with >= in square_span$',
 ]

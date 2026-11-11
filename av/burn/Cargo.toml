@@ -1,0 +1,10 @@
+[package]
+name = "burn-geom"
+version.workspace = true
+edition.workspace = true
+description = "The test-burn geometry shared with the OBS/DistroAV C++ (camera-box #367, #1260, #1367, #1370): the node-burn slot table, the quiet-zone box finder, the within-tick burn cache and the colour-reference scale. Pure std, no I/O"
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
