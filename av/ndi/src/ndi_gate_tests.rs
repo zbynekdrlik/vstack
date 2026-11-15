@@ -1399,3 +1399,20 @@ fn a_zero_height_frame_converts_to_nothing() {
     s.convert_nv12_to_uyvy(&[], 4, 0);
     assert!(s.uyvy_buffer.is_empty());
 }
+
+#[test]
+fn wait_for_next_boundary_sleeps_until_the_boundary_it_returns() {
+    // A short sleep that returns a future boundary passes one call only when it began within
+    // that sleep of a boundary; 7 ms between calls puts the next start mid-interval at 60 fps.
+    for _ in 0..3 {
+        let b = wait_for_next_boundary_100ns(60);
+        let now = get_wall_clock_100ns();
+        assert!(b <= now, "returned {b} before reaching it (now {now})");
+        assert_eq!(
+            b,
+            floor_boundary_100ns(b, 60),
+            "a boundary of the 60 fps grid"
+        );
+        std::thread::sleep(Duration::from_millis(7));
+    }
+}
