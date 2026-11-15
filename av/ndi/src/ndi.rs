@@ -511,15 +511,32 @@ fn reannounce_dance<O: NdiSendOps>(
 /// "network down → do nothing" — so a transient read error never spuriously re-creates the
 /// sender. IPv4 only: NDI discovery on this LAN is IPv4 mDNS.
 fn current_network_signature() -> crate::reannounce::NetworkSignature {
-    let mut addrs: Vec<String> = Vec::new();
-    // SAFETY: getifaddrs allocates a linked list we free with freeifaddrs; every pointer is
-    // null-checked before deref and we never retain a pointer past freeifaddrs.
-    unsafe {
+    // SAFETY: getifaddrs allocates a linked list we free with freeifaddrs; the walk null-checks
+    // every pointer before deref and keeps no pointer past freeifaddrs.
+    let addrs = unsafe {
         let mut ifap: *mut libc::ifaddrs = ptr::null_mut();
         if libc::getifaddrs(&mut ifap) != 0 || ifap.is_null() {
             tracing::warn!("#297 getifaddrs failed; treating network as down this cycle");
             return crate::reannounce::NetworkSignature::default();
         }
+        let addrs = usable_ipv4_addrs(ifap);
+        libc::freeifaddrs(ifap);
+        addrs
+    };
+    crate::reannounce::NetworkSignature::from_addrs(addrs)
+}
+
+/// The walk half of [`current_network_signature`] (vstack#8: split out so a test can feed it a
+/// hand-built list): the dotted-quad IPv4 address of every entry that is up, not loopback, and a
+/// discoverable LAN NIC, in list order.
+///
+/// # Safety
+/// `ifap` is null or the head of a valid `ifaddrs` list (as `getifaddrs` returns it) that stays
+/// alive for the call: every `ifa_next`, `ifa_addr` and `ifa_name` is null or valid, and an
+/// `AF_INET` `ifa_addr` points at a `sockaddr_in`.
+unsafe fn usable_ipv4_addrs(ifap: *const libc::ifaddrs) -> Vec<String> {
+    let mut addrs: Vec<String> = Vec::new();
+    unsafe {
         let mut cur = ifap;
         while !cur.is_null() {
             let ifa = &*cur;
@@ -559,9 +576,21 @@ fn current_network_signature() -> crate::reannounce::NetworkSignature {
             let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
             addrs.push(ip.to_string());
         }
-        libc::freeifaddrs(ifap);
     }
-    crate::reannounce::NetworkSignature::from_addrs(addrs)
+    addrs
+}
+
+/// True once `elapsed` since the last re-announce poll has reached
+/// [`crate::reannounce::REANNOUNCE_POLL_INTERVAL`] (the throttle of
+/// [`NdiSender::maybe_reannounce`]).
+fn reannounce_poll_due(elapsed: std::time::Duration) -> bool {
+    elapsed >= crate::reannounce::REANNOUNCE_POLL_INTERVAL
+}
+
+/// The line stride of a `width`-pixel UYVY frame in the conversion buffer: 2 bytes a pixel, no
+/// padding.
+fn uyvy_stride(width: u32) -> u32 {
+    width * 2
 }
 
 pub struct NdiSender {
@@ -669,15 +698,24 @@ impl NdiSender {
     /// a real network change (already a disruption), NEVER in steady state, because
     /// [`crate::reannounce::should_reannounce`] returns false for an unchanged address set.
     pub fn maybe_reannounce(&mut self) -> Result<bool> {
+        self.maybe_reannounce_with(current_network_signature)
+    }
+
+    /// [`Self::maybe_reannounce`] with the network read injected (vstack#8: a test passes a fixed
+    /// signature instead of the host's getifaddrs).
+    fn maybe_reannounce_with(
+        &mut self,
+        read_signature: impl FnOnce() -> crate::reannounce::NetworkSignature,
+    ) -> Result<bool> {
         // The poll interval is the deliberate sampling window: a network state shorter than it
         // (a sub-2s flap that returns the same IP between two polls) is not observed — accepted
         // for a LAN appliance where real changes are seconds-scale. A genuinely flapping NIC
         // re-creates the sender at most once per interval (no tighter hysteresis is needed).
-        if self.last_reannounce_check.elapsed() < crate::reannounce::REANNOUNCE_POLL_INTERVAL {
+        if !reannounce_poll_due(self.last_reannounce_check.elapsed()) {
             return Ok(false);
         }
         self.last_reannounce_check = std::time::Instant::now();
-        let current = current_network_signature();
+        let current = read_signature();
         let reannounce = self.reannounce.should_reannounce(&current);
         if current.is_empty() {
             // Network down — remember the outage so the recovery re-announces even if the same
@@ -867,24 +905,36 @@ impl NdiSender {
         // Simple MJPEG decoder using system libjpeg via turbojpeg would be ideal,
         // but for simplicity we'll use a pure-Rust approach
         // For now, fail gracefully - full MJPEG support would need additional dependency
-        use std::io::Write;
-        use std::process::Command;
 
         // Use ffmpeg as external decoder (commonly available)
-        let mut child = Command::new("ffmpeg")
-            .args([
-                "-f",
-                "mjpeg",
-                "-i",
-                "pipe:0",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "uyvy422",
-                "-frames:v",
-                "1",
-                "pipe:1",
-            ])
+        let mut decoder = std::process::Command::new("ffmpeg");
+        decoder.args([
+            "-f",
+            "mjpeg",
+            "-i",
+            "pipe:0",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "uyvy422",
+            "-frames:v",
+            "1",
+            "pipe:1",
+        ]);
+        self.run_mjpeg_decoder(decoder, mjpeg)
+    }
+
+    /// Run `decoder` (the ffmpeg command [`Self::decode_mjpeg_to_uyvy`] builds) with `mjpeg` on
+    /// its stdin, and take its stdout as the UYVY frame. vstack#8: split out so a test can run a
+    /// stand-in command.
+    fn run_mjpeg_decoder(
+        &mut self,
+        mut decoder: std::process::Command,
+        mjpeg: &[u8],
+    ) -> Result<()> {
+        use std::io::Write;
+
+        let mut child = decoder
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -1018,19 +1068,19 @@ impl NdiSender {
             }
             "YUYV" => {
                 self.convert_yuyv_to_uyvy(data);
-                (self.uyvy_buffer.as_ptr(), width * 2)
+                (self.uyvy_buffer.as_ptr(), uyvy_stride(width))
             }
             "NV12" => {
                 self.convert_nv12_to_uyvy(data, width as usize, height as usize);
-                (self.uyvy_buffer.as_ptr(), width * 2)
+                (self.uyvy_buffer.as_ptr(), uyvy_stride(width))
             }
             "MJPG" => {
                 self.decode_mjpeg_to_uyvy(data, width as usize, height as usize)?;
-                (self.uyvy_buffer.as_ptr(), width * 2)
+                (self.uyvy_buffer.as_ptr(), uyvy_stride(width))
             }
             "BGRA" | "BGR4" | "RX24" => {
                 self.convert_bgra_to_uyvy(data, width as usize, height as usize);
-                (self.uyvy_buffer.as_ptr(), width * 2)
+                (self.uyvy_buffer.as_ptr(), uyvy_stride(width))
             }
             format => {
                 anyhow::bail!(
@@ -1197,12 +1247,24 @@ impl NdiReceiver {
     /// which is guaranteed to happen once before giving up — so a caller can defer a fallback
     /// choice until discovery had its full window (#1362 cameraman preview resolution).
     /// `label` names what is being searched for in the log/error lines.
-    pub fn connect_with<F>(timeout_secs: u32, label: &str, mut pick: F) -> Result<Self>
+    pub fn connect_with<F>(timeout_secs: u32, label: &str, pick: F) -> Result<Self>
     where
         F: FnMut(&[crate::preview_source::DiscoveredSource], bool) -> Option<String>,
     {
-        let lib = Arc::new(NdiLib::load()?);
+        Self::connect_with_lib(Arc::new(NdiLib::load()?), timeout_secs, label, pick)
+    }
 
+    /// [`Self::connect_with`] over an already loaded `lib` (vstack#8: a test passes a stand-in
+    /// function table).
+    fn connect_with_lib<F>(
+        lib: Arc<NdiLib>,
+        timeout_secs: u32,
+        label: &str,
+        mut pick: F,
+    ) -> Result<Self>
+    where
+        F: FnMut(&[crate::preview_source::DiscoveredSource], bool) -> Option<String>,
+    {
         tracing::info!("Searching for NDI source: {}", label);
 
         // Create finder
@@ -2057,3 +2119,7 @@ mod ffi_seam_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "ndi_gate_tests.rs"]
+mod gate_tests;

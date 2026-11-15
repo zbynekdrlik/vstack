@@ -611,4 +611,44 @@ mod tests {
         let (line, warn) = window_summary(&few, 7200, 16.667);
         assert!(!warn, "{line}");
     }
+
+    #[test]
+    fn an_infinite_oversleep_is_ignored_1242() {
+        let mut w = StaggerWindow::default();
+        w.note_slept(1.0, f64::INFINITY);
+        assert_eq!(w.slept, 1);
+        assert_eq!(w.max_oversleep_ms, 0.0);
+    }
+
+    #[test]
+    fn a_negative_zero_reading_does_not_replace_an_equal_maximum_1242() {
+        // -0.0 == 0.0, so only a strict `>` keeps the +0.0 maximum; the summary prints the sign.
+        let mut w = StaggerWindow::default();
+        w.note_slept(0.0, -0.0);
+        w.note_work(-0.0);
+        assert!(w.max_oversleep_ms.is_sign_positive());
+        assert!(w.max_work_ms.is_sign_positive());
+        let (line, _) = window_summary(&w, 0, 16.667);
+        assert!(line.contains("max per-frame work 0.0 ms"), "{line}");
+        assert!(line.contains("max oversleep 0.00 ms"), "{line}");
+    }
+
+    #[test]
+    fn oversleep_warns_on_the_sum_of_offset_and_oversleep_1242() {
+        // 1 ms offset + 4 ms oversleep = 5 ms, exactly half of a 10 ms interval: WARN.
+        let w = StaggerWindow {
+            slept: 10,
+            max_oversleep_ms: 4.0,
+            ..StaggerWindow::default()
+        };
+        let (line, warn) = window_summary(&w, 1000, 10.0);
+        assert!(warn && line.contains("OVERSLEEP"), "{line}");
+    }
+
+    #[test]
+    fn an_empty_window_never_warns_on_skips_1242() {
+        let (line, warn) = window_summary(&StaggerWindow::default(), 0, 0.0);
+        assert!(!warn, "{line}");
+        assert!(!line.contains("MANY SKIPS"), "{line}");
+    }
 }

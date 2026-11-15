@@ -342,4 +342,23 @@ mod tests {
             "after recovery the down flag is cleared and a stable poll does not re-fire"
         );
     }
+
+    #[test]
+    fn signature_getters_report_the_canonical_list() {
+        assert!(NetworkSignature::default().is_empty());
+        let s = NetworkSignature::from_addrs(["10.0.0.2", " 10.0.0.1 ", "10.0.0.2", ""]);
+        assert!(!s.is_empty());
+        assert_eq!(s.addrs(), ["10.0.0.1", "10.0.0.2"]);
+        assert!(NetworkSignature::from_addrs([" ", ""]).addrs().is_empty());
+    }
+
+    #[test]
+    fn saw_down_reports_an_outage_until_a_successful_announce() {
+        let mut state = ReannounceState::new(sig(&["10.0.0.1"]));
+        assert!(!state.saw_down());
+        state.mark_down();
+        assert!(state.saw_down());
+        state.record_reannounce_attempt(sig(&["10.0.0.1"]), true);
+        assert!(!state.saw_down());
+    }
 }

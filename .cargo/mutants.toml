@@ -76,4 +76,32 @@ exclude_re = [
   '^av/capture/src/capture_phase\.rs:1038:31: replace > with >= in CapturePhase::source_rate_ppm$',
   '^av/capture/src/capture_phase/source_phase\.rs:136:83: replace > with >= in SourcePhase::ready$',
   '^av/capture/src/capture_phase/source_phase\.rs:148:38: replace > with >= in SourcePhase::period_ns$',
+  # vstack#8 batch 2 tag C, av-ndi. SDK/host-bound, not equivalent: init_from_library's only
+  # decision is the real NDIlib_initialize() result, and current_network_signature only calls
+  # getifaddrs/freeifaddrs (its walk, usable_ipv4_addrs, is tested on a hand-built list). Neither
+  # can be faked without the runtime-loaded libndi.so or the host's interfaces.
+  '^av/ndi/src/ndi\.rs:[0-9]+:[0-9]+: (replace|.* in) NdiLib::init_from_library$',
+  '^av/ndi/src/ndi\.rs:[0-9]+:[0-9]+: (replace current_network_signature ->.*|.* in current_network_signature)$',
+  # CPU-bound, not equivalent: AVX2 detection returning true differs only on a CPU without AVX2,
+  # and the gate runners have it (the test asserts both against /proc/cpuinfo and catches it on
+  # such a CPU). The non-x86_64 bodies are cfg'd out of the x86_64 gate build: no test runs them.
+  '^av/ndi/src/ndi\.rs:787:9: replace NdiSender::detect_avx2 -> bool with true$',
+  '^av/ndi/src/ndi\.rs:1606:5: replace has_avx2 -> bool with true$',
+  '^av/ndi/src/ndi\.rs:792:9: replace NdiSender::detect_avx2 -> bool with true$',
+  '^av/ndi/src/ndi\.rs:1611:5: replace has_avx2 -> bool with true$',
+  # Equivalent, pinned to line:col. In wait_for_next_boundary_100ns the wait is clamped to >= 0,
+  # and `>=` only adds thread::sleep(Duration::ZERO), which returns at once: same boundary.
+  '^av/ndi/src/ndi\.rs:80:19: replace > with >= in wait_for_next_boundary_100ns$',
+  # The conversions' reserve(width * height * 2) only sizes capacity ahead of the pushes, which
+  # write the same bytes; `+`, and `/` on the `* 2`, never divide by zero. (`/` on width * height
+  # panics at height 0 and is tested.)
+  '^av/ndi/src/ndi\.rs:(881|960):40: replace \* with \+ in NdiSender::convert_(nv12|bgra)_to_uyvy$',
+  '^av/ndi/src/ndi\.rs:(881|960):49: replace \* with [+/] in NdiSender::convert_(nv12|bgra)_to_uyvy$',
+  # configured_fps == 0.0 makes the interval 1000.0 / 0.0 = +inf, and a finite send duration is
+  # never >= inf x 1.5: no stall either way.
+  '^av/ndi/src/ndi\.rs:1124:27: replace > with >= in NdiSender::send_frame_data_with_timecode$',
+  # num_sources == 0 iterates 0..0, nothing, whether or not the array is read.
+  '^av/ndi/src/ndi\.rs:1299:28: replace > with >= in NdiReceiver::connect_with_lib$',
+  # nv12.len() == y_size gives &nv12[y_size..], the same empty chroma plane as `&[]`.
+  '^av/ndi/src/ndi\.rs:1539:34: replace > with >= in convert_nv12_to_uyvy$',
 ]
