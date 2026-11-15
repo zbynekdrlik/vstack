@@ -1071,7 +1071,6 @@ impl CapturePhase {
 /// the middle of the tracked slot while [`CapturePhase::stamp_frame`] drives the stream, else
 /// today's raw capture instant mapped into the realtime domain
 /// (`genlock_stamp::capture_realtime_100ns`).
-#[cfg(target_os = "linux")]
 pub fn stamp_instant_100ns(
     phase_slot_ns: Option<u64>,
     interval_ns: u64,

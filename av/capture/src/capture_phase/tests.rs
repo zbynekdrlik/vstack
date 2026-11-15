@@ -658,7 +658,6 @@ fn a_step_folded_while_seeding_never_locks_a_tilted_fit() {
 
 /// The capture loop's stamp instant (fed to `genlock_emit_timecode_100ns`): the slot middle while
 /// the tracker drives, else today's raw capture instant in the realtime domain.
-#[cfg(target_os = "linux")]
 #[test]
 fn the_stamp_instant_is_the_slot_middle_when_driven_else_the_raw_capture() {
     let slot = grid_floor_ns(SEC_2309 * NS_PER_SECOND + 123_456_789, I60);
@@ -701,7 +700,6 @@ fn slot_helpers_round_trip_on_the_sender_grid_all_day() {
 
 /// The capture loop stamps a tracked frame through `genlock_emit_timecode_100ns` of the slot
 /// middle: that must be exactly the slot's sender stamp.
-#[cfg(target_os = "linux")]
 #[test]
 fn the_capture_loop_timecode_of_a_tracked_slot_is_the_slot_stamp() {
     let mut rng = Rng(0x1367_d20e);

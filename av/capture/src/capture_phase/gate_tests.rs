@@ -307,6 +307,10 @@ fn a_stream_that_stops_driving_restarts_its_slots() {
     assert_eq!(c.crossings(), 0);
 }
 
+/// `push(2, T0)` builds a non-monotonic fit `observe` never produces: it pins the defensive
+/// `p > 0.0` guard of `rate_ppm`. Not an exclude: unlike the source fit (whose `offer` keeps t
+/// strictly increasing), the short fit is shifted by `absorb_step` apart from the samples it
+/// folds, so `nb > 0` has no clean proof there.
 #[test]
 fn a_flat_fit_has_no_rate() {
     let mut c = CapturePhase::new();

@@ -62,13 +62,14 @@ exclude_re = [
   '^av/capture/src/capture\.rs:[0-9]+:[0-9]+: replace query_card_name -> Option<String> with None$',
   # vstack#8 batch 2 tag B, capture_phase, pinned to line:col. A run is held past 30 outliers only
   # while Forming (Step absorbs, Other re-seeds); Forming needs the last of at most 3 plateau starts
-  # in the newest 3 samples, so it ends by run length 35, never at MAX_STAIRCASE_RUN (60).
+  # in the newest 3 samples, so it is Forming at most up to run length 35, never at MAX_STAIRCASE_RUN (60).
   '^av/capture/src/capture_phase\.rs:513:79: replace < with <= in CapturePhaseTracker::observe$',
   # Window x values strictly increase, so 3 or more samples give d > 0: `d >= 0` reads no new case.
   '^av/capture/src/capture_phase\.rs:574:38: replace > with >= in CapturePhaseTracker::period_ns$',
   # residuals_are_white only reads |sum[q]|: `-=` builds each sum as the exact IEEE negation.
   '^av/capture/src/capture_phase\.rs:740:20: replace \+= with -= in CapturePhaseTracker::residuals_are_white$',
-  # n >= 4 there, and q = 4i/n takes every value 0..3 (i = ceil(qn/4) < n): count[q] >= 1 always.
+  # n >= 4 there, and q = 4i/n takes every value 0..3 (i = ceil(qn/4) < n): count[q] >= 1 always
+  # (and an empty quarter would give 0.0 / 0.0 = NaN, which fails `<= bound` on both sides).
   '^av/capture/src/capture_phase\.rs:745:33: replace > with >= in CapturePhaseTracker::residuals_are_white$',
   # The source fit only keeps points with strictly increasing x and t, and shift moves every t
   # alike, so nb > 0 and d > 0: its period is never 0.0, and span > 0 or 3 points imply d > 0.
