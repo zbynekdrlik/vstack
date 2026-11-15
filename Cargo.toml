@@ -6,7 +6,7 @@ members = ["av/burn", "av/capture", "av/marker", "av/ndi", "jxs/sys", "jxs/link"
 resolver = "2"
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 license = "MIT"
 
