@@ -250,9 +250,8 @@ fn the_header_declares_exactly_the_functions_the_library_exports() {
     }
 }
 
-/// The static library cargo built for this test run: `deps/libjxs_recv_ffi-<hash>.a` next to the
-/// test binary (a test build never uplifts it to the profile dir). The newest one, should an
-/// older build's copy still lie there.
+/// The static library cargo built for this test run (a test build never uplifts it to the profile
+/// dir): [`find_staticlib`].
 fn staticlib() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     let a = find_staticlib(&exe).unwrap_or_else(|| {
@@ -265,11 +264,20 @@ fn staticlib() -> PathBuf {
     a
 }
 
-/// The newest `libjxs_recv_ffi-*.a` cargo built for the test binary `exe`.
+/// The newest `libjxs_recv_ffi-*.a` cargo built for the test binary `exe`, in either layout:
+/// cargo's classic `<profile>/deps/` (the archive beside the test binary), or cargo 1.100's
+/// per-unit `<profile>/build/jxs-recv-ffi/<hash>/out/` (vstack #12). The profile directory is the
+/// first ancestor of `exe` that holds a `build` directory. The newest one wins, should an older
+/// build's copy still lie there.
 fn find_staticlib(exe: &Path) -> Option<PathBuf> {
-    let deps: &Path = exe.parent()?;
-    std::fs::read_dir(deps)
-        .ok()?
+    let profile = exe.ancestors().skip(1).find(|d| d.join("build").is_dir())?;
+    let mut dirs = vec![profile.join("deps")];
+    if let Ok(units) = std::fs::read_dir(profile.join("build/jxs-recv-ffi")) {
+        dirs.extend(units.filter_map(Result::ok).map(|e| e.path().join("out")));
+    }
+    dirs.iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| {
