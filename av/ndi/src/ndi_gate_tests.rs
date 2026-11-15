@@ -122,8 +122,19 @@ fn with_fake<R>(f: impl FnOnce(&mut Fake) -> R) -> R {
     FAKE.with(|fake| f(&mut fake.borrow_mut()))
 }
 
+/// More SDK calls than any test makes. A mutant that turns a bounded loop into an endless one
+/// (the finder's timeout, vstack #8) would grow the call log until the CI runner runs out of memory
+/// and shuts down, before the per-mutant timeout. Aborting here kills it in milliseconds instead.
+const MAX_FAKE_CALLS: usize = 100_000;
+
 fn record(call: Call) {
-    with_fake(|fake| fake.calls.push(call));
+    with_fake(|fake| {
+        if fake.calls.len() >= MAX_FAKE_CALLS {
+            eprintln!("fake NDI SDK: more than {MAX_FAKE_CALLS} calls, an endless loop");
+            std::process::abort();
+        }
+        fake.calls.push(call)
+    });
 }
 
 fn take_calls() -> Vec<Call> {
