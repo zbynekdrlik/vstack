@@ -30,4 +30,34 @@ exclude_re = [
   '^av/burn/src/burn_regions\.rs:164:30: replace > with >= in slot_rect$',
   # In square_span, sh == sw has abs_diff 0 <= tol and has already returned, so `>=` reads no new case.
   '^av/burn/src/burn_quiet_zone\.rs:197:11: replace > with >= in square_span$',
+  # vstack#8 batch 2 tag A, pinned to line:col. In is_send_stall / is_capture_stall the first clause
+  # already returned for frame_interval_ms <= 0, so the threshold interval x 1.5 is positive: a
+  # duration <= 0 never reaches it, whether `< 0.0` reads `<= 0.0` or `== 0.0`.
+  '^rig/core/src/send_stall\.rs:45:76: replace < with (<=|==) in is_send_stall$',
+  '^av/capture/src/capture_stall\.rs:44:76: replace < with (<=|==) in is_capture_stall$',
+  # In evaluate_wedge the same guard also returns Alive for threshold_s <= 0, and a progress age <= 0
+  # is never >= a positive (or NaN) threshold: Alive either way.
+  '^av/capture/src/capture_wedge\.rs:70:40: replace < with (<=|==) in evaluate_wedge$',
+  # In frame_from_nonempty_queue `||` binds looser than `&&`: the mutant guard reads
+  # A || (interval <= 0 && !finite(duration)) || duration < 0. A finite duration >= 0 against an
+  # interval <= 0 then fails `duration < interval x 0.5`; a non-finite one fails it too (+inf, NaN)
+  # or hits `duration < 0` (-inf). Not buffered on both sides.
+  '^av/capture/src/capture_stall\.rs:110:9: replace \|\| with && in frame_from_nonempty_queue$',
+  # In mean_chroma / luma_roughness a zero width or height loops zero times, so count stays 0 and
+  # the fallback returns the same 0 as the early return.
+  '^av/capture/src/capture\.rs:275:33: replace \|\| with && in mean_chroma$',
+  '^av/capture/src/capture\.rs:353:33: replace \|\| with && in luma_roughness$',
+  # In CaptureTally::record_sequence a zero gap adds 0 to dropped_captures; `>=` only adds a log line.
+  '^av/capture/src/capture\.rs:787:20: replace > with >= in CaptureTally::record_sequence$',
+  # In obs_frame_stamp_100ns frame_ts == mono_now maps the tick to wall_now; its nearest boundary is
+  # floor(wall_now) or the next one, and the clamp to floor(wall_now) returns send_floor either way,
+  # which is what `>=` returns.
+  '^rig/core/src/genlock_stamp\.rs:118:24: replace > with >= in obs_frame_stamp_100ns$',
+  # Device-bound, not equivalent: these run only against an open V4L2 device, and CI has none. The
+  # accounting and decisions they call are pure and tested (CaptureTally, apply_controls_with,
+  # frame_integrity_issue, ControlReport::has_issues); what is left is the ioctl plumbing, driven by
+  # camera-box on the rig. query_card_name's error path is tested; `None` needs a real card.
+  '^av/capture/src/capture\.rs:[0-9]+:[0-9]+: (replace|.* in) VideoCapture::[a-z_]+',
+  '^av/capture/src/capture\.rs:[0-9]+:[0-9]+: (replace|.* in) <impl ControlIo for Device>::[a-z_]+',
+  '^av/capture/src/capture\.rs:[0-9]+:[0-9]+: replace query_card_name -> Option<String> with None$',
 ]
