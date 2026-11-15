@@ -105,7 +105,7 @@ pub const OBS_FRAME_STAMP_MAX_AGE_NS: u64 = 1_000_000_000;
 /// the floor of `wall_now` so a stamp is never future-dated (#1009). A frame timestamp that is
 /// 0, in the future or older than [`OBS_FRAME_STAMP_MAX_AGE_NS`] is stamped at the call, the
 /// pre-1367 rule. `fps <= 0` stamps `wall_now`. Mirrored by `genlock_frame_stamp_100ns` in
-/// `vendor/distroav/src/ndi-output.cpp` (parity gate `tests/obs_frame_stamp_parity_1367.rs`).
+/// camera-box `vendor/distroav/src/ndi-output.cpp` (parity gate camera-box `tests/obs_frame_stamp_parity_1367.rs`).
 pub fn obs_frame_stamp_100ns(
     wall_now_100ns: i64,
     mono_now_ns: u64,
@@ -294,7 +294,7 @@ pub fn v4l_timestamp_to_monotonic_100ns(sec: i64, usec: i64) -> i64 {
 /// sleep ends, its boundary is at-or-before "now" anyway.
 ///
 /// Mirror of the DistroAV sender's `genlock_floor_boundary_100ns`
-/// (vendor/distroav/src/ndi-output.cpp) — keep both in lock-step.
+/// (camera-box `vendor/distroav/src/ndi-output.cpp`) — keep both in lock-step.
 pub fn floor_boundary_100ns(now_100ns: i64, fps: i64) -> i64 {
     if fps <= 0 {
         return now_100ns;

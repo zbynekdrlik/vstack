@@ -258,7 +258,7 @@ pub const CHROMA_SAMPLE_FRAMES: u32 = 60;
 /// `width * 2 * height`, and a padded device (`stride > width * 2`) would
 /// otherwise have its padding bytes sampled as bogus chroma. (Same reason
 /// [`yuyv_to_gray8`] takes a stride.) Within each row it samples every
-/// [`CHROMA_SAMPLE_STRIDE`] macropixels to keep per-call cost small; at
+/// `CHROMA_SAMPLE_STRIDE` macropixels to keep per-call cost small; at
 /// 1920×1080 stride=3840 that is ~15 samples/row × 1080 rows ≈ 16 k samples —
 /// negligible even at the 1 Hz periodic log rate.
 ///
@@ -345,7 +345,7 @@ pub const NOISE_ROUGHNESS_THRESHOLD: f32 = 40.0;
 ///
 /// Same subsampling contract as [`mean_chroma`]: honours `stride` (bytes per row, so a
 /// row-padded device is sampled on REAL pixel data only), samples every
-/// [`CHROMA_SAMPLE_STRIDE`] macropixels, and skips any sample whose bytes fall outside the
+/// `CHROMA_SAMPLE_STRIDE` macropixels, and skips any sample whose bytes fall outside the
 /// buffer. Returns the mean `|Y0 − Y1|` in `[0.0, 255.0]`; `0.0` when no in-bounds sample
 /// exists (empty/undersized buffer or zero dimensions).
 pub fn luma_roughness(frame: &[u8], width: usize, height: usize, stride: usize) -> f32 {
@@ -627,7 +627,7 @@ pub fn color_production_controls() -> Vec<CaptureControl> {
 /// [`color_production_controls`] — precisely so a future decision to drop, retune,
 /// or replace it (e.g. once real bright content can be checked, or if the physical
 /// units are swapped for a different model) is a one-line change, same as any other
-/// documented per-model policy in [`documented_controls_for_model`].
+/// documented per-model policy in `documented_controls_for_model`.
 pub fn elgato_4k_s_corrective_controls() -> Vec<CaptureControl> {
     vec![CaptureControl {
         id: V4L2_CID_SATURATION,

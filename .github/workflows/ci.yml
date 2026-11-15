@@ -42,6 +42,12 @@ jobs:
       # camera-box-jxs without the codec: the build the OBS side and a non-Linux target see.
       - name: Clippy (camera-box-jxs, no codec)
         run: cargo clippy -p camera-box-jxs --all-targets --locked -- -D warnings
+      # camera-box builds its probe for Windows and re-exports these crates' portable modules, so
+      # they must build there without V4L2 (vstack#8).
+      - name: Check the portable crates for Windows
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          cargo check -p av-capture -p rig-core --target x86_64-pc-windows-gnu --locked
 
   test:
     name: Test

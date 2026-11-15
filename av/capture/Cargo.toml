@@ -9,7 +9,9 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
-[dependencies]
+# Only the capture module (Linux only) uses a dependency: v4l2-sys-mit builds its bindings from
+# linux/videodev2.h. The decision modules stay portable (camera-box builds them for Windows).
+[target.'cfg(target_os = "linux")'.dependencies]
 anyhow = "1"
 rig-core = { path = "../../rig/core" }
 tracing = "0.1"
