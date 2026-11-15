@@ -1417,8 +1417,10 @@ fn wait_for_next_boundary_sleeps_until_the_boundary_it_returns() {
     // that sleep of a boundary; 7 ms between calls puts the next start mid-interval at 60 fps.
     for _ in 0..3 {
         let b = wait_for_next_boundary_100ns(60);
-        let now = get_wall_clock_100ns();
-        assert!(b <= now, "returned {b} before reaching it (now {now})");
+        // 1 ms of slack absorbs a wall-clock step during the sleep; the no-sleep mutant returns
+        // a boundary up to 16.7 ms ahead, and 7 ms between calls keeps at most one call near one.
+        let now = get_wall_clock_100ns() + 10_000;
+        assert!(b <= now, "returned {b} before reaching it (now + 1 ms {now})");
         assert_eq!(
             b,
             floor_boundary_100ns(b, 60),
