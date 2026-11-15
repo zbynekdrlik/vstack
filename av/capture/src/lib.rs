@@ -8,6 +8,9 @@
 // only (V4L2).
 #[cfg(target_os = "linux")]
 pub mod capture;
+// The per-stream capture phase tracker: the camera period and phase fitted from the V4L2 sequence
+// and timestamp, so the genlock stamp decides on a smoothed capture instant (camera-box #1367, #1482).
+pub mod capture_phase;
 // Capture-delivery-rate sanity check and the grabber model table (camera-box #656).
 pub mod capture_rate_health;
 // The blocking V4L2 dequeue stall decision (camera-box #707).
