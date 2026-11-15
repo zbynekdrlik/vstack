@@ -1112,3 +1112,7 @@ pub fn slot_stamp_100ns(slot_ns: u64, interval_ns: u64, fps: u64) -> i64 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "capture_phase/gate_tests.rs"]
+mod gate_tests;

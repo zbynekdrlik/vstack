@@ -74,12 +74,17 @@ impl SourcePhase {
             i128::from(t) - i128::from(t0),
         );
         let max_span = SOURCE_FIT_SECONDS * NS_PER_SECOND;
-        while self.window.len() > SOURCE_FIT_MAX_POINTS
-            || self
-                .window
-                .front()
-                .is_some_and(|&(_, front_t)| t - front_t > max_span)
-        {
+        // Bounded by the window length (each pop drops one point, an empty window is never stale),
+        // so a broken condition or pop can never spin forever.
+        for _ in 0..self.window.len() {
+            let stale = self.window.len() > SOURCE_FIT_MAX_POINTS
+                || self
+                    .window
+                    .front()
+                    .is_some_and(|&(_, front_t)| t - front_t > max_span);
+            if !stale {
+                break;
+            }
             self.pop_front();
         }
     }
