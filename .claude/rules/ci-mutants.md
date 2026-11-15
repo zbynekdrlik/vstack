@@ -35,3 +35,6 @@ paths:
 - A moved test can pass for the wrong reason. When a test asserts `None` from a function with
   several early returns, check which return fires. vstack#8 batch 3 found a band test that
   `square_span` rejected before the band check ran.
+
+- Device-bound code (a V4L2 stream, an ioctl wrapper) cannot be mutated usefully in CI, which has no device. First move its decisions and counters into pure, tested types (vstack#8: `CaptureTally`, `ControlReport::has_issues`). Then exclude only the plumbing that is left, by function, with a comment that says it is device-bound, not equivalent. Diff `--list` with and without `--no-config` to prove the excludes match only missed or unviable mutants.
+- A loop counter mutated `+=` to `*=` from 0 hangs the test, and the gate reports a TIMEOUT that fails the shard after 120 s. Write the loop with `step_by` so that mutant does not exist.
