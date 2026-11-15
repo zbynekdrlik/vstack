@@ -47,7 +47,7 @@ jobs:
       - name: Check the portable crates for Windows
         run: |
           rustup target add x86_64-pc-windows-gnu
-          cargo check -p av-capture -p rig-core --target x86_64-pc-windows-gnu --locked
+          cargo check -p av-capture -p av-ndi -p rig-core --target x86_64-pc-windows-gnu --locked
 
   test:
     name: Test
@@ -77,6 +77,8 @@ jobs:
         run: cargo nextest run --locked -p burn-geom
       - name: Run tests (av-capture)
         run: cargo nextest run --locked -p av-capture
+      - name: Run tests (av-ndi)
+        run: cargo nextest run --locked -p av-ndi
       - name: Run tests (camera-box-jxs, no codec)
         run: cargo nextest run --locked -p camera-box-jxs
       - name: Run tests (camera-box-jxs, codec)

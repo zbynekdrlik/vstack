@@ -28,6 +28,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "av-ndi"
+version = "0.1.10"
+dependencies = [
+ "anyhow",
+ "av-capture",
+ "libc",
+ "libloading",
+ "rig-core",
+ "tracing",
+ "v4l",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.65.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

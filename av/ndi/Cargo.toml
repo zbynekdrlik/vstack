@@ -1,0 +1,23 @@
+[package]
+name = "av-ndi"
+version.workspace = true
+edition.workspace = true
+description = "The cambox NDI side (camera-box #1487, vstack #8 batch 2): the NDI sender and receiver over the runtime-loaded NDI SDK, and the pure send-stagger, re-announce and preview-source decisions"
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+rig-core = { path = "../../rig/core" }
+
+# Only the ndi module (Linux only) uses these: it takes av-capture's V4L2 frame types (and v4l's
+# FourCC) and reads the interfaces with getifaddrs. The decision modules stay portable.
+[target.'cfg(target_os = "linux")'.dependencies]
+anyhow = "1"
+av-capture = { path = "../capture" }
+libc = "0.2"
+libloading = "0.8"
+tracing = "0.1"
+v4l = "0.14"
