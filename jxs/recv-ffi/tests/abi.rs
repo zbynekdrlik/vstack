@@ -250,14 +250,37 @@ fn the_header_declares_exactly_the_functions_the_library_exports() {
     }
 }
 
-/// The static library cargo built for this test run: `deps/libjxs_recv_ffi-<hash>.a` next to the
-/// test binary (a test build never uplifts it to the profile dir). The newest one, should an
-/// older build's copy still lie there.
+/// The static library cargo built for this test run (a test build never uplifts it to the profile
+/// dir): [`find_staticlib`].
 fn staticlib() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
-    let deps: &Path = exe.parent().unwrap();
-    let a = std::fs::read_dir(deps)
-        .unwrap()
+    let a = find_staticlib(&exe).unwrap_or_else(|| {
+        panic!(
+            "no libjxs_recv_ffi-*.a for the test binary {}",
+            exe.display()
+        )
+    });
+    assert!(a.is_file());
+    a
+}
+
+/// The newest `libjxs_recv_ffi-*.a` cargo built for the test binary `exe`, in either layout:
+/// cargo's classic `<profile>/deps/` (the archive beside the test binary), or cargo 1.100's
+/// per-unit `<profile>/build/jxs-recv-ffi/<hash>/out/` (vstack #12). The profile directory is the
+/// ancestor of `exe` whose next path component is `deps` or `build`, read from the path alone. The
+/// newest one wins, should an older build's copy still lie there.
+fn find_staticlib(exe: &Path) -> Option<PathBuf> {
+    let profile = exe.ancestors().skip(1).find(|d| {
+        let next = exe.strip_prefix(d).ok().and_then(|r| r.components().next());
+        matches!(next.map(|c| c.as_os_str()), Some(s) if s == "deps" || s == "build")
+    })?;
+    let mut dirs = vec![profile.join("deps")];
+    if let Ok(units) = std::fs::read_dir(profile.join("build/jxs-recv-ffi")) {
+        dirs.extend(units.filter_map(Result::ok).map(|e| e.path().join("out")));
+    }
+    dirs.iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| {
@@ -265,9 +288,53 @@ fn staticlib() -> PathBuf {
             n.starts_with("libjxs_recv_ffi-") && n.ends_with(".a")
         })
         .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
-        .unwrap_or_else(|| panic!("no libjxs_recv_ffi-*.a in {}", deps.display()));
-    assert!(a.is_file());
-    a
+}
+
+/// vstack #12: cargo's classic layout puts the test binary and the archive together in
+/// `<profile>/deps/`; from cargo 1.100 each unit has its own `<profile>/build/<pkg>/<hash>/out/`.
+/// The archive is found in both.
+#[test]
+fn the_static_library_is_found_in_both_cargo_layouts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let touch = |p: &Path| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"").unwrap();
+    };
+
+    let classic = root.join("classic/debug");
+    std::fs::create_dir_all(classic.join("build")).unwrap();
+    touch(&classic.join("deps/abi-1111"));
+    touch(&classic.join("deps/libjxs_recv_ffi-2222.a"));
+    assert_eq!(
+        find_staticlib(&classic.join("deps/abi-1111")),
+        Some(classic.join("deps/libjxs_recv_ffi-2222.a"))
+    );
+
+    let unit = root.join("unit/debug");
+    std::fs::create_dir_all(unit.join("deps")).unwrap();
+    touch(&unit.join("build/jxs-recv-ffi/1111/out/abi-1111"));
+    touch(&unit.join("build/jxs-recv-ffi/2222/out/libjxs_recv_ffi-2222.a"));
+    touch(&unit.join("build/jxs-send-ffi/3333/out/libjxs_send_ffi-3333.a"));
+    assert_eq!(
+        find_staticlib(&unit.join("build/jxs-recv-ffi/1111/out/abi-1111")),
+        Some(unit.join("build/jxs-recv-ffi/2222/out/libjxs_recv_ffi-2222.a"))
+    );
+
+    // An older build's archive in another unit directory loses to the newest one.
+    let older = unit.join("build/jxs-recv-ffi/0000/out/libjxs_recv_ffi-0000.a");
+    touch(&older);
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&older)
+        .unwrap()
+        .set_modified(hour_ago)
+        .unwrap();
+    assert_eq!(
+        find_staticlib(&unit.join("build/jxs-recv-ffi/1111/out/abi-1111")),
+        Some(unit.join("build/jxs-recv-ffi/2222/out/libjxs_recv_ffi-2222.a"))
+    );
 }
 
 /// The link flags the strih DistroAV build uses for this library (`vendor/distroav/CMakeLists.txt`):
