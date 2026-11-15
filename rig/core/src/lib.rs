@@ -34,8 +34,14 @@ pub mod genlock_n1_depth;
 // The grid-exact N>=2 conveyor (camera-box #1367): an N>=2 source presents a pure function of the
 // render tick and the pin. The C `genlock_n2_*` in obs-source.c mirrors it (vstack#8).
 pub mod genlock_n2_grid;
+// The capture instant to genlock timecode stamp and the monotonic->realtime offset cache (camera-box
+// #286, #1372). The app reads both clocks and hands the reads in; no clock is read here.
+pub mod genlock_stamp;
 // The one wall-step detector of the genlock render tick (camera-box #1372): a dantesync fleet DATE
 // step re-grids the tick in one tick. It reacts to the clock; the clock itself stays in dsync. The C
 // twin is `libobs/obs-genlock-wall-step.h`.
 pub mod genlock_wall_step;
 pub mod irq_offload;
+// The NDI blocking-send stall decision (camera-box #707), shared by the NDI sender and the capture
+// dequeue stall check.
+pub mod send_stall;

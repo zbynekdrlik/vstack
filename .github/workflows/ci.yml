@@ -69,6 +69,8 @@ jobs:
         run: cargo nextest run --locked -p qpsk-marker
       - name: Run tests (burn-geom)
         run: cargo nextest run --locked -p burn-geom
+      - name: Run tests (av-capture)
+        run: cargo nextest run --locked -p av-capture
       - name: Run tests (camera-box-jxs, no codec)
         run: cargo nextest run --locked -p camera-box-jxs
       - name: Run tests (camera-box-jxs, codec)

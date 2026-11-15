@@ -1,0 +1,16 @@
+[package]
+name = "av-capture"
+version.workspace = true
+edition.workspace = true
+description = "The cambox V4L2 capture side (camera-box #1487, vstack #8 batch 2): the capture device and its controls, the frame types the NDI sender takes, and the pure capture-rate, dequeue-stall and wedge decisions"
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+rig-core = { path = "../../rig/core" }
+tracing = "0.1"
+v4l = "0.14"
