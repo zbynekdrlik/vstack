@@ -182,6 +182,13 @@ mod tests {
         assert!(!is_capture_stall(f64::NAN, 16.7));
     }
 
+    /// vstack #8: an infinite reading is a bad measurement too, never a stall (it would pass
+    /// the threshold if only NaN were guarded).
+    #[test]
+    fn infinite_duration_never_stalls_defensive_guard() {
+        assert!(!is_capture_stall(f64::INFINITY, 16.7));
+    }
+
     #[test]
     fn thirty_fps_interval_boundary() {
         // 30fps -> 33.33ms interval; 1.5x = 50.0ms.

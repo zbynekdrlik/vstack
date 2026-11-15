@@ -317,6 +317,10 @@ pub fn floor_boundary_100ns(now_100ns: i64, fps: i64) -> i64 {
 }
 
 #[cfg(test)]
+#[path = "genlock_stamp_obs_frame_tests.rs"]
+mod obs_frame_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

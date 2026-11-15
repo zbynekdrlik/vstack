@@ -954,4 +954,13 @@ mod tests {
              never be classified chronic, no matter how many cumulative deviant windows it logs"
         );
     }
+
+    /// vstack #8: the card string alone names the NZXT card, with or without the vendor word.
+    #[test]
+    fn signal_hd60_without_the_vendor_word_is_the_nzxt_card() {
+        assert_eq!(
+            grabber_model_from_card_name("Signal HD60 Video"),
+            GrabberModel::NzxtSignalHd60
+        );
+    }
 }

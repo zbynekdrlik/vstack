@@ -280,8 +280,7 @@ pub fn mean_chroma(frame: &[u8], width: usize, height: usize, stride: usize) -> 
     let mut count: u64 = 0;
     for y in 0..height {
         let row_start = y * stride;
-        let mut mp = 0usize;
-        while mp < macropixels_per_row {
+        for mp in (0..macropixels_per_row).step_by(CHROMA_SAMPLE_STRIDE) {
             // Macropixel `mp` of row `y`: Y0 U Y1 V — U at +1, V at +3.
             let idx = row_start + mp * 4;
             if idx + 3 < frame.len() {
@@ -291,7 +290,6 @@ pub fn mean_chroma(frame: &[u8], width: usize, height: usize, stride: usize) -> 
                 v_sum += v.unsigned_abs() as u64;
                 count += 1;
             }
-            mp += CHROMA_SAMPLE_STRIDE;
         }
     }
     if count == 0 {
@@ -359,8 +357,7 @@ pub fn luma_roughness(frame: &[u8], width: usize, height: usize, stride: usize) 
     let mut count: u64 = 0;
     for y in 0..height {
         let row_start = y * stride;
-        let mut mp = 0usize;
-        while mp < macropixels_per_row {
+        for mp in (0..macropixels_per_row).step_by(CHROMA_SAMPLE_STRIDE) {
             // Macropixel `mp` of row `y`: Y0 U Y1 V — Y0 at +0, Y1 at +2 are two
             // horizontally adjacent luma pixels (1px apart).
             let idx = row_start + mp * 4;
@@ -370,7 +367,6 @@ pub fn luma_roughness(frame: &[u8], width: usize, height: usize, stride: usize) 
                 diff_sum += (y0 - y1).unsigned_abs() as u64;
                 count += 1;
             }
-            mp += CHROMA_SAMPLE_STRIDE;
         }
     }
     if count == 0 {
@@ -751,6 +747,80 @@ pub struct ControlReport {
     pub failed: usize,
 }
 
+impl ControlReport {
+    /// A control was clamped, could not be verified, or was rejected: worth one WARN after the
+    /// apply (capture continues either way).
+    pub fn has_issues(&self) -> bool {
+        self.adjusted > 0 || self.failed > 0
+    }
+}
+
+/// The capture-loss accounting of one V4L2 stream: the frames the device dropped (V4L2 `sequence`
+/// gaps), the buffers it delivered, and the delivered buffers dropped as corrupted. Kept apart from
+/// [`VideoCapture`], which needs a live device, so the accounting is unit-tested on its own.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureTally {
+    /// V4L2 `sequence` of the last delivered buffer, for capture-drop detection
+    /// ([`sequence_gap`]). `None` until the first frame.
+    last_sequence: Option<u32>,
+    /// Cumulative count of frames the capture device dropped over this stream's life.
+    dropped_captures: u64,
+    /// Count of delivered buffers (frames the device actually captured) over this
+    /// stream's life. Paired with `dropped_captures` it is the cam2→cam1 LOSS denominator
+    /// the verdict reports (`serialize_capture_stats`).
+    frames_captured: u64,
+    /// #696: cumulative count of delivered buffers [`VideoCapture::process_frame`]
+    /// flagged as content-corrupted ([`frame_integrity_issue`]) and DROPPED (never passed to
+    /// the caller's callback) over this stream's life. Distinct from `dropped_captures`
+    /// (frames the DEVICE never delivered at all) — these frames WERE delivered, on schedule,
+    /// with a good `sequence`, but their pixel content was flagged as bad.
+    corrupted_frames: u64,
+}
+
+impl CaptureTally {
+    /// Record a delivered buffer's V4L2 `sequence`, accounting for any frames the
+    /// capture device dropped since the previous buffer ([`sequence_gap`]). Logs
+    /// each gap with the surrounding sequence numbers and keeps a running total.
+    pub fn record_sequence(&mut self, seq: u32) {
+        if let Some(prev) = self.last_sequence {
+            let gap = sequence_gap(prev, seq);
+            if gap > 0 {
+                self.dropped_captures += gap as u64;
+                tracing::warn!(
+                    "capture device dropped {} frame(s): v4l2 sequence {} -> {} (total dropped {})",
+                    gap,
+                    prev,
+                    seq,
+                    self.dropped_captures
+                );
+            }
+        }
+        self.last_sequence = Some(seq);
+        self.frames_captured += 1;
+    }
+
+    /// Count one delivered buffer dropped as corrupted; returns the new total.
+    pub fn record_corrupted(&mut self) -> u64 {
+        self.corrupted_frames += 1;
+        self.corrupted_frames
+    }
+
+    /// Total frames the capture device has dropped (cumulative [`sequence_gap`]).
+    pub fn dropped_captures(&self) -> u64 {
+        self.dropped_captures
+    }
+
+    /// Total DELIVERED buffers.
+    pub fn frames_captured(&self) -> u64 {
+        self.frames_captured
+    }
+
+    /// Total delivered buffers dropped as corrupted (#696).
+    pub fn corrupted_frames(&self) -> u64 {
+        self.corrupted_frames
+    }
+}
+
 /// Abstraction over a V4L2 device's integer picture-control get/set, so the
 /// apply-controls POLICY (warn-and-continue, NEVER fatal) is unit-testable without a
 /// real `/dev/video*` node. Implemented for the live [`Device`]; tests inject a fake
@@ -951,21 +1021,8 @@ pub struct VideoCapture {
     fourcc: FourCC,
     stride: u32,
     frame_rate: FrameRate,
-    /// V4L2 `sequence` of the last delivered buffer, for capture-drop detection
-    /// ([`sequence_gap`]). `None` until the first frame.
-    last_sequence: Option<u32>,
-    /// Cumulative count of frames the capture device dropped over this stream's life.
-    dropped_captures: u64,
-    /// Count of delivered buffers (frames the device actually captured) over this
-    /// stream's life. Paired with `dropped_captures` it is the cam2→cam1 LOSS denominator
-    /// the verdict reports (`serialize_capture_stats`).
-    frames_captured: u64,
-    /// #696: cumulative count of delivered buffers [`process_frame`](Self::process_frame)
-    /// flagged as content-corrupted ([`frame_integrity_issue`]) and DROPPED (never passed to
-    /// the caller's callback) over this stream's life. Distinct from `dropped_captures`
-    /// (frames the DEVICE never delivered at all) — these frames WERE delivered, on schedule,
-    /// with a good `sequence`, but their pixel content was flagged as bad.
-    corrupted_frames: u64,
+    /// The stream's capture-loss accounting.
+    tally: CaptureTally,
 }
 
 impl VideoCapture {
@@ -1074,10 +1131,7 @@ impl VideoCapture {
             fourcc,
             stride,
             frame_rate,
-            last_sequence: None,
-            dropped_captures: 0,
-            frames_captured: 0,
-            corrupted_frames: 0,
+            tally: CaptureTally::default(),
         })
     }
 
@@ -1088,7 +1142,7 @@ impl VideoCapture {
     /// — a soft-but-running stream beats no stream. Empty `controls` is a no-op.
     fn apply_controls(device: &Device, controls: &[CaptureControl]) {
         let report = apply_controls_with(device, controls);
-        if report.adjusted > 0 || report.failed > 0 {
+        if report.has_issues() {
             tracing::warn!(
                 "capture controls applied with {} clamped/unverified and {} unsupported \
                  (device may lack picture controls — capture continues)",
@@ -1098,32 +1152,11 @@ impl VideoCapture {
         }
     }
 
-    /// Record a delivered buffer's V4L2 `sequence`, accounting for any frames the
-    /// capture device dropped since the previous buffer ([`sequence_gap`]). Logs
-    /// each gap with the surrounding sequence numbers and keeps a running total.
-    fn record_sequence(&mut self, seq: u32) {
-        if let Some(prev) = self.last_sequence {
-            let gap = sequence_gap(prev, seq);
-            if gap > 0 {
-                self.dropped_captures += gap as u64;
-                tracing::warn!(
-                    "capture device dropped {} frame(s): v4l2 sequence {} -> {} (total dropped {})",
-                    gap,
-                    prev,
-                    seq,
-                    self.dropped_captures
-                );
-            }
-        }
-        self.last_sequence = Some(seq);
-        self.frames_captured += 1;
-    }
-
     /// Total frames the capture device has dropped over this stream's life
     /// (cumulative [`sequence_gap`]). Capture-card loss, not pipeline loss.
     /// Surfaced in the periodic streaming report (`main.rs`).
     pub fn dropped_captures(&self) -> u64 {
-        self.dropped_captures
+        self.tally.dropped_captures()
     }
 
     /// Total DELIVERED buffers (frames the device actually captured) over this stream's life.
@@ -1133,7 +1166,7 @@ impl VideoCapture {
     /// verdict's cam2→cam1 loss gate is the drop COUNT (`v4l2_dropped == 0`), so this value is
     /// context, not part of the pass/fail.
     pub fn frames_captured(&self) -> u64 {
-        self.frames_captured
+        self.tally.frames_captured()
     }
 
     /// #696: cumulative count of delivered buffers dropped for failing
@@ -1143,7 +1176,7 @@ impl VideoCapture {
     /// same as `dropped_captures`, so this failure class is finally visible without needing
     /// a full E2E optical decode to notice it.
     pub fn corrupted_frames(&self) -> u64 {
-        self.corrupted_frames
+        self.tally.corrupted_frames()
     }
 
     /// Write cam1's V4L2 capture-drop statistics to `path` (the cam1-capture-stats sidecar
@@ -1153,7 +1186,7 @@ impl VideoCapture {
     pub fn write_capture_stats(&self, path: &str) -> Result<()> {
         std::fs::write(
             path,
-            serialize_capture_stats(self.dropped_captures, self.frames_captured),
+            serialize_capture_stats(self.tally.dropped_captures(), self.tally.frames_captured()),
         )
         .with_context(|| format!("write cam1 capture-stats sidecar {path}"))?;
         Ok(())
@@ -1168,7 +1201,7 @@ impl VideoCapture {
         // Copy frame data (zero-copy would require unsafe lifetime tricks)
         let data = buffer.to_vec();
         // `buffer`/`metadata` borrow self.stream; record AFTER that borrow ends.
-        self.record_sequence(seq);
+        self.tally.record_sequence(seq);
 
         Ok(Frame {
             data,
@@ -1204,15 +1237,15 @@ impl VideoCapture {
         if let Some(reason) =
             frame_integrity_issue(metadata.flags, metadata.bytesused, expected_bytes)
         {
-            self.corrupted_frames += 1;
+            let corrupted = self.tally.record_corrupted();
             tracing::warn!(
                 "capture device delivered a CORRUPTED buffer (v4l2 sequence {}): {} \
                  (total corrupted {}) — frame dropped, not sent",
                 seq,
                 reason,
-                self.corrupted_frames
+                corrupted
             );
-            self.record_sequence(seq);
+            self.tally.record_sequence(seq);
             return Ok(());
         }
 
@@ -1240,7 +1273,7 @@ impl VideoCapture {
 
         // `buffer`/`metadata` borrow self.stream; record AFTER that borrow ends
         // (after the callback) so the capture-drop accounting can take &mut self.
-        self.record_sequence(seq);
+        self.tally.record_sequence(seq);
 
         // Buffer automatically requeued when it goes out of scope
         Ok(())
@@ -1278,6 +1311,10 @@ impl VideoCapture {
         self.frame_rate
     }
 }
+
+#[cfg(test)]
+#[path = "capture_gate_tests.rs"]
+mod gate_tests;
 
 #[cfg(test)]
 mod tests {
