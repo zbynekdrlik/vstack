@@ -317,6 +317,9 @@ mod decode {
         pub last_error: Option<String>,
         /// Picture header changes seen (each one a sender bpp change).
         pub header_changes: u64,
+        /// Decoders opened from a whole frame (vstack #20: each one costs that frame's decode
+        /// until the whole frame has arrived).
+        pub opens: u64,
     }
 
     impl<F: FnMut(&FrameReport, Option<&YuvPlanes>)> DecodeSink<F> {
@@ -335,6 +338,7 @@ mod decode {
                 errors: 0,
                 last_error: None,
                 header_changes: 0,
+                opens: 0,
             }
         }
 
@@ -391,7 +395,10 @@ mod decode {
                 self.whole.extend_from_slice(p);
             }
             match Decoder::open(&self.whole) {
-                Ok(d) => self.dec = Some(d),
+                Ok(d) => {
+                    self.dec = Some(d);
+                    self.opens += 1;
+                }
                 Err(e) => {
                     self.last_error = Some(e.to_string());
                     self.errors += 1;
@@ -520,6 +527,55 @@ mod tests {
     use super::*;
     use crate::jxs_link::{self, PacketHeader, DATAGRAM_LEN};
     use crate::jxs_send::JxsSocket;
+
+    /// vstack #20 (camera-box#1536, PP 18.11.2026): the auto bpp swaps 4 <-> 5 every few minutes;
+    /// each swap reopened the decoder from a whole frame and cost frames on the strih's genlock.
+    /// A swap back to a bpp the receiver has already decoded must reuse its decoder: frames at
+    /// 4, then 5, then 4 again open two decoders, not three, and every frame decodes.
+    #[test]
+    fn a_swap_back_to_a_bpp_already_seen_reuses_its_decoder() {
+        use crate::jxs_link::{FrameReport, SliceSink};
+        use svt_jpegxs_sys::{Encoder, EncoderSettings};
+        let (w, h) = (256u32, 64u32);
+        let enc_at = |bpp| {
+            Encoder::open(EncoderSettings {
+                bpp_numerator: bpp,
+                ..EncoderSettings::issue_1387(w, h)
+            })
+            .expect("encoder")
+        };
+        let (mut e4, mut e5) = (enc_at(4), enc_at(5));
+        let mut decoded = Vec::new();
+        let mut sink = DecodeSink::new(|r: &FrameReport, p: Option<&svt_jpegxs_sys::YuvPlanes>| {
+            decoded.push((r.timecode, p.is_some()))
+        });
+        let mut tc = 0u64;
+        for bpp in [4, 4, 4, 5, 5, 5, 4, 4] {
+            let enc = if bpp == 4 { &mut e4 } else { &mut e5 };
+            tc += 333_333;
+            let mut packets: Vec<Vec<u8>> = Vec::new();
+            enc.encode_frame(|_, b, _| packets.push(b.to_vec()))
+                .expect("encode");
+            let n = packets.len() as u8;
+            for (i, p) in packets.iter().enumerate() {
+                sink.packet(tc, i as u8, n, Some(p));
+            }
+            sink.frame_done(&FrameReport {
+                timecode: tc,
+                camera_id: 1,
+                slice_count: n,
+                lost_slices: 0,
+                first_arrival: 0,
+                last_arrival: 0,
+            });
+        }
+        assert_eq!(sink.header_changes, 2, "4 -> 5 -> 4");
+        assert_eq!(sink.opens, 2, "the swap back to 4 reuses the 4 bpp decoder");
+        assert_eq!(sink.errors, 0);
+        drop(sink);
+        assert_eq!(decoded.len(), 8);
+        assert!(decoded.iter().all(|(_, ok)| *ok), "{decoded:?}");
+    }
 
     #[test]
     fn recvmmsg_with_gro_returns_every_datagram_of_a_gso_slice() {
