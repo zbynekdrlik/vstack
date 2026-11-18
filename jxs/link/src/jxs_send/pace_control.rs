@@ -153,9 +153,10 @@ impl PaceControl {
                 send_span_us,
                 lost_slices: r.lost_slices,
                 delay_unjudged,
-                // the stretch's base per bpp; the safe start's frame-spread pace is not the
+                // the stretch's base per bpp; the SAFE START's frame-spread pace is not the
                 // steady regime (live 30.10.2026: its spans set a base the receiver-link pace
-                // never reaches again)
+                // never reaches again). The frame-spread pace of a known slower link (vstack #18)
+                // is: constant within a bpp, it changes with the bpp, whose base is its own
                 stretch_regime: Some(self.bpp),
                 stretch_mode: match self.current.map(|d| d.source) {
                     None | Some(pace_auto::PaceSource::StartSpread) => StretchMode::Skip,
@@ -328,8 +329,9 @@ mod tests {
     }
 
     /// The strih output on 10 GbE to a stream box on 1 GbE: the safe start until the first
-    /// report, then 900 from the report, line rate when the receiver moves to a faster port, and
-    /// back to the safe start when a report says the link is unknown.
+    /// report, then the frame spread under the reported link (vstack #18), the link's 90 % once the
+    /// spread passes it, line rate when the receiver moves to a faster port, and back to the safe
+    /// start when a report says the link is unknown.
     #[test]
     fn the_pace_follows_the_receivers_report_and_changes_once_per_change() {
         let mut p = PaceControl::new(0, None);
@@ -343,12 +345,19 @@ mod tests {
         assert_eq!(
             p.changed(),
             Some(PaceDecision {
+                mbps: 579,
+                source: PaceSource::FrameSpread
+            })
+        );
+        // a bpp step moves the spread; 8 bpp passes the 1 GbE link's 90 %
+        p.on_frames(1920, 1080, 8);
+        assert_eq!(
+            p.changed(),
+            Some(PaceDecision {
                 mbps: 900,
                 source: PaceSource::ReceiverLink
             })
         );
-        // a bpp step does not move a link-derived pace
-        p.on_frames(1920, 1080, 8);
         assert_eq!(p.changed(), None);
         p.on_report_t(&report(10_000));
         assert_eq!(p.changed().map(|d| d.source), Some(PaceSource::LineRate));
@@ -362,7 +371,7 @@ mod tests {
         p.fill(&mut w);
         assert_eq!(
             (w.pace_mbps, w.pace_source, w.rx_link_mbps, w.own_link_mbps),
-            (2250, PaceSource::ReceiverLink, 2500, 10_000)
+            (1153, PaceSource::FrameSpread, 2500, 10_000)
         );
     }
 

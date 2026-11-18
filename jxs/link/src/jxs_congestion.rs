@@ -802,4 +802,21 @@ mod tests {
             "past the envelope by more than the margin"
         );
     }
+
+    #[test]
+    fn a_stretch_exactly_the_margin_over_its_envelope_is_not_over_use() {
+        // quiet stretches 4 ms and 7 ms at the full pace: base 4 ms, envelope 7 ms; then one
+        // report 3.5 ms over the base (> the 3 ms bound) and `over` us over the envelope
+        let judge = |over: u32| {
+            let mut c = Congestion::default();
+            let tx = 20_000;
+            for (k, st) in [(1, 4_000), (2, 7_000), (3, 4_000)] {
+                let s = c.on_report(&rep(k, 0, tx + st, tx), k as f64);
+                assert_ne!(s.state, PathState::Overuse, "quiet report {k}");
+            }
+            c.on_report(&rep(4, 0, tx + 7_000 + over, tx), 4.0).state
+        };
+        assert_ne!(judge(500), PathState::Overuse, "exactly the margin");
+        assert_eq!(judge(501), PathState::Overuse);
+    }
 }

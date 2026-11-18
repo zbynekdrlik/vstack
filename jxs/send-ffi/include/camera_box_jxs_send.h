@@ -32,9 +32,12 @@ extern "C" {
 /* cbjxs_send_stats.pace_source: where the window's pace came from (issue 1387). */
 #define CBJXS_SEND_PACE_LINE_RATE 0u     /* the receiver's link is as fast as the sender's */
 #define CBJXS_SEND_PACE_FIXED 1u         /* cbjxs_send_config.pace_mbps above 0 */
-#define CBJXS_SEND_PACE_RECEIVER_LINK 2u /* 90 % of the receiver's slower link (its report) */
+#define CBJXS_SEND_PACE_RECEIVER_LINK 2u /* 90 % of the receiver's slower link (its report): the
+                                         * frame spread is not under it */
 #define CBJXS_SEND_PACE_START_SPREAD 3u  /* no receiver link known yet: the frame spread */
 #define CBJXS_SEND_PACE_CONGESTION 4u    /* the automatic pace lowered by the path's congestion */
+#define CBJXS_SEND_PACE_FRAME_SPREAD 5u  /* a slower receiver: each frame spread over half its
+                                         * interval (vstack #18) */
 
 /* cbjxs_send_stats.path_state: the path as the delay-based congestion control judged it last. */
 #define CBJXS_SEND_PATH_UNKNOWN 0u
@@ -66,8 +69,9 @@ typedef struct cbjxs_send_config {
 	uint8_t bpp_max;    /* its ceiling, 0 = 8, at most 12; min == max = that bpp, fixed (auto off) */
 	uint8_t reserved;
 	/* The send pacing in Mb/s of Ethernet wire (payload + 66 bytes per datagram). 0 = AUTOMATIC
-	 * (ABI 3): 90 % of the receiver's link (its report) when that is slower than the sender's own
-	 * link, else line rate; the frame spread until the first report names a link. 100..100000 =
+	 * (ABI 3): when the receiver's link (its report) is slower than the sender's own link, each
+	 * frame spread over half its interval, never over 90 % of that link (vstack #18), else line
+	 * rate; the frame spread until the first report names a link. 100..100000 =
 	 * that rate, fixed (an override). Paced slices go at most 16 datagrams per send. */
 	uint32_t pace_mbps;
 	uint32_t reserved2;

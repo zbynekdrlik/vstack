@@ -35,6 +35,7 @@ pub const CBJXS_SEND_PACE_FIXED: u32 = 1;
 pub const CBJXS_SEND_PACE_RECEIVER_LINK: u32 = 2;
 pub const CBJXS_SEND_PACE_START_SPREAD: u32 = 3;
 pub const CBJXS_SEND_PACE_CONGESTION: u32 = 4;
+pub const CBJXS_SEND_PACE_FRAME_SPREAD: u32 = 5;
 
 /// `cbjxs_send_stats.path_state` (`CBJXS_SEND_PATH_*`).
 pub const CBJXS_SEND_PATH_UNKNOWN: u32 = 0;
@@ -62,6 +63,7 @@ pub fn pace_source_code(s: camera_box_jxs::jxs_link::pace_auto::PaceSource) -> u
         P::ReceiverLink => CBJXS_SEND_PACE_RECEIVER_LINK,
         P::StartSpread => CBJXS_SEND_PACE_START_SPREAD,
         P::Congestion => CBJXS_SEND_PACE_CONGESTION,
+        P::FrameSpread => CBJXS_SEND_PACE_FRAME_SPREAD,
     }
 }
 
@@ -718,10 +720,11 @@ mod tests {
                 P::Fixed,
                 P::ReceiverLink,
                 P::StartSpread,
-                P::Congestion
+                P::Congestion,
+                P::FrameSpread
             ]
             .map(pace_source_code),
-            [0, 1, 2, 3, 4]
+            [0, 1, 2, 3, 4, 5]
         );
         assert_eq!(
             (s.path_state, s.congestion_pct, s.queue_delay_us),

@@ -53,6 +53,10 @@ fn pins() -> Vec<(String, usize)> {
             CBJXS_SEND_PACE_CONGESTION as usize,
         ),
         (
+            "CBJXS_SEND_PACE_FRAME_SPREAD".into(),
+            CBJXS_SEND_PACE_FRAME_SPREAD as usize,
+        ),
+        (
             "CBJXS_SEND_PATH_UNKNOWN".into(),
             CBJXS_SEND_PATH_UNKNOWN as usize,
         ),
