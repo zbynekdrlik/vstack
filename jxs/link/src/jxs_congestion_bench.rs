@@ -116,15 +116,14 @@ struct Outcome {
     bpp_at_60s: u32,
     first_congestion_step_s: Option<f64>,
     congestion_steps: u32,
-    /// Pace changes after the first 30 s (a settled link has none: no sawtooth).
-    pace_changes_after_30s: u32,
+    /// Pace changes after the first 30 s that the congestion factor made (a settled link has none:
+    /// no sawtooth). A frame-spread pace also follows each bpp step (vstack #18): those are no
+    /// sawtooth and are not counted.
+    congestion_pace_changes_after_30s: u32,
     /// Pace changes after 200 s (long after the download: the recovered link must settle).
     pace_changes_after_200s: u32,
     /// Pace changes after 300 s.
     pace_changes_after_300s: u32,
-    /// Pace changes after 60 s: the bpp is at 8 by then, and a frame-spread pace follows the bpp
-    /// until it is (vstack #18).
-    pace_changes_after_60s: u32,
     first_jxs_drop_s: Option<f64>,
     /// Frames with any lost datagram while the download ran (60..120 s) and after 70 s.
     lossy_frames_download: u32,
@@ -220,17 +219,14 @@ fn run(sc: Scenario) -> Outcome {
         pace.on_frames(1920, 1080, bpp);
         if let Some(d) = pace.changed() {
             pace_mbps = d.mbps;
-            if t_s >= 30.0 {
-                out.pace_changes_after_30s += 1;
+            if t_s >= 30.0 && d.source == PaceSource::Congestion {
+                out.congestion_pace_changes_after_30s += 1;
             }
             if t_s >= 200.0 {
                 out.pace_changes_after_200s += 1;
             }
             if t_s >= 300.0 {
                 out.pace_changes_after_300s += 1;
-            }
-            if t_s >= 60.0 {
-                out.pace_changes_after_60s += 1;
             }
         }
         let code = 1920.0 * 1080.0 * bpp as f64 / 8.0;
@@ -517,7 +513,7 @@ fn the_programs_ndi_burst_sharing_the_port_is_not_congestion() {
     assert_eq!(o.bpp_at_end, 8);
     assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
     // vstack #18: the frame-spread pace follows the bpp's climb, then no change: no sawtooth
-    assert_eq!(o.pace_changes_after_60s, 0, "no pace sawtooth");
+    assert_eq!(o.congestion_pace_changes_after_30s, 0, "no pace sawtooth");
 }
 
 /// The same NDI burst plus the owner's saturating download: the link still backs off before the
@@ -642,7 +638,7 @@ fn an_ndi_burst_landing_at_a_varying_point_is_not_congestion() {
     assert_eq!(o.bpp_at_end, 8);
     assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
     // vstack #18: the frame-spread pace follows the bpp's climb, then no change: no sawtooth
-    assert_eq!(o.pace_changes_after_60s, 0, "no pace sawtooth");
+    assert_eq!(o.congestion_pace_changes_after_30s, 0, "no pace sawtooth");
 }
 
 /// The same varying burst plus the owner's saturating download: the link must still back off and
@@ -685,7 +681,8 @@ const USB_NIC_STREAM: Scenario = Scenario {
 
 /// The pace the program output used to run on that path, 90 % of the 2.5 GbE link (2250 Mb/s),
 /// replayed as a fixed setting: it overflows the NIC again and again (the bench reproduces the
-/// live fault).
+/// live fault). A fixed setting is exempt from the congestion factor, which could lower the old
+/// receiver-link pace for a while (live it climbed straight back): this is its worst case.
 #[test]
 fn the_old_ninety_percent_of_the_link_pace_overflows_a_usb_receiver_nic() {
     let o = run(Scenario {
@@ -714,5 +711,5 @@ fn the_frame_spread_program_output_never_overflows_a_usb_receiver_nic() {
     assert_eq!(o.congestion_steps, 0);
     assert_eq!(o.bpp_at_end, 8);
     assert_eq!(o.pace_at_end, (1153, Some(PaceSource::FrameSpread)));
-    assert_eq!(o.pace_changes_after_60s, 0, "no pace sawtooth");
+    assert_eq!(o.congestion_pace_changes_after_30s, 0, "no pace sawtooth");
 }

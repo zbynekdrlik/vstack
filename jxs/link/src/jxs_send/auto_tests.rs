@@ -273,10 +273,11 @@ fn the_auto_bpp_climbs_on_clean_reports_and_falls_on_a_loss_without_losing_a_fra
     assert!(datagrams_ok, "every frame whole");
 }
 
-/// Issue 1387 (owner 29.10.2026, no hand-set pace): the sender paces to 90 % of the link the
-/// receiver names in its report, through the real packet thread. The loopback has no link speed
-/// (the sender's own link is unknown), so a 1000 Mb/s receiver link paces at 900; the status window
-/// names the source and both links.
+/// Issue 1387 (owner 29.10.2026, no hand-set pace): the sender paces to the link the receiver names
+/// in its report, through the real packet thread. The loopback has no link speed (the sender's own
+/// link is unknown), so a 1000 Mb/s receiver link is slower: the small test frame is spread over
+/// half its interval (vstack #18), far under 900, at the schedule's 100 Mb/s floor; the status
+/// window names the source and both links.
 #[cfg(feature = "jxs")]
 #[test]
 fn the_sender_paces_to_the_link_the_receivers_report_names() {

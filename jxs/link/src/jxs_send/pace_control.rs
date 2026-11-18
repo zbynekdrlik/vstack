@@ -153,9 +153,10 @@ impl PaceControl {
                 send_span_us,
                 lost_slices: r.lost_slices,
                 delay_unjudged,
-                // the stretch's base per bpp; the safe start's frame-spread pace is not the
+                // the stretch's base per bpp; the SAFE START's frame-spread pace is not the
                 // steady regime (live 30.10.2026: its spans set a base the receiver-link pace
-                // never reaches again)
+                // never reaches again). The frame-spread pace of a known slower link (vstack #18)
+                // is: constant within a bpp, it changes with the bpp, whose base is its own
                 stretch_regime: Some(self.bpp),
                 stretch_mode: match self.current.map(|d| d.source) {
                     None | Some(pace_auto::PaceSource::StartSpread) => StretchMode::Skip,

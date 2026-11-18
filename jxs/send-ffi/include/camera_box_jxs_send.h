@@ -69,8 +69,9 @@ typedef struct cbjxs_send_config {
 	uint8_t bpp_max;    /* its ceiling, 0 = 8, at most 12; min == max = that bpp, fixed (auto off) */
 	uint8_t reserved;
 	/* The send pacing in Mb/s of Ethernet wire (payload + 66 bytes per datagram). 0 = AUTOMATIC
-	 * (ABI 3): 90 % of the receiver's link (its report) when that is slower than the sender's own
-	 * link, else line rate; the frame spread until the first report names a link. 100..100000 =
+	 * (ABI 3): when the receiver's link (its report) is slower than the sender's own link, each
+	 * frame spread over half its interval, never over 90 % of that link (vstack #18), else line
+	 * rate; the frame spread until the first report names a link. 100..100000 =
 	 * that rate, fixed (an override). Paced slices go at most 16 datagrams per send. */
 	uint32_t pace_mbps;
 	uint32_t reserved2;
