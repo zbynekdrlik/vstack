@@ -69,7 +69,7 @@ const STATS_FIELDS: [&str; 20] = [
     "camera_id",
     "reserved",
     "link_mbps",
-    "reserved2",
+    "decoder_opens",
     "fec_repaired",
 ];
 
@@ -114,7 +114,7 @@ fn rust_stats_offset(f: &str) -> usize {
         "camera_id" => offset_of!(CbjxsStats, camera_id),
         "reserved" => offset_of!(CbjxsStats, reserved),
         "link_mbps" => offset_of!(CbjxsStats, link_mbps),
-        "reserved2" => offset_of!(CbjxsStats, reserved2),
+        "decoder_opens" => offset_of!(CbjxsStats, decoder_opens),
         "fec_repaired" => offset_of!(CbjxsStats, fec_repaired),
         other => panic!("unknown stats field {other}"),
     }

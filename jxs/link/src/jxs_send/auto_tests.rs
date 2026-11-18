@@ -343,3 +343,59 @@ fn the_sender_paces_to_the_link_the_receivers_report_names() {
     );
     assert!(w.frames > 0, "{}", w.status_line());
 }
+
+/// Real frames through a real receiver (a smoke test of the report path the vstack #21 rules sit
+/// in; `reports_late` / `report_decode_us` are tested on their own): the report counts every
+/// decoded frame, none late (timecodes on the wall clock), with a decode time in microseconds.
+#[cfg(feature = "jxs")]
+#[test]
+fn the_receivers_report_counts_the_decoded_frames_and_their_decode_time() {
+    use crate::jxs_recv::{JxsReceiver, ReceiverConfig};
+    use std::time::{Duration, Instant};
+    let mut rx = JxsReceiver::bind(ReceiverConfig {
+        send_reports: false,
+        ..ReceiverConfig::new("127.0.0.1:0".parse().unwrap())
+    })
+    .unwrap();
+    let port = rx.local_addr().unwrap().port();
+    let (mut h, ready_rx) = JxsHandoff::unstarted();
+    let socket = JxsSocket::connect(&format!("127.0.0.1:{port}")).unwrap();
+    let opts = SenderOptions::new(BppMode::Fixed(4), None);
+    assert!(h.start_threads(ready_rx, socket, 5, vec![0, 1], opts));
+    let (w, ht) = (256u32, 64u32);
+    let frame: Vec<u8> = (0..w * ht * 2).map(|i| (i * 7 % 251) as u8).collect();
+    let start = Instant::now();
+    let mut next_frame = start;
+    // well under the report period: the receiver's own report is never taken in between
+    while start.elapsed() < Duration::from_millis(700) {
+        if Instant::now() >= next_frame {
+            h.offer(&JxsFrame {
+                data: &frame,
+                width: w,
+                height: ht,
+                stride: w * 2,
+                yuyv: true,
+                timecode_100ns: crate::jxs_recv::realtime_100ns(),
+                capture_realtime_100ns: 0,
+                emit_fps: 30,
+            });
+            next_frame += Duration::from_millis(33);
+        }
+        rx.poll(Duration::from_millis(5)).unwrap();
+    }
+    let r = rx.take_report();
+    assert!(r.frames >= 5, "{r:?}");
+    let t = rx.totals();
+    assert_eq!((t.decoder_opens, t.header_changes), (1, 0), "{t:?}");
+    assert_eq!(r.late_frames, 0, "{r:?}");
+    assert_eq!(r.lost_slices, 0, "{r:?}");
+    assert_ne!(
+        r.decode_p99_us,
+        jxs_link::NO_DECODE_TIME,
+        "the steady frames: {r:?}"
+    );
+    assert!(
+        (10..100_000).contains(&r.decode_p99_us),
+        "a real decode time in microseconds: {r:?}"
+    );
+}

@@ -104,8 +104,11 @@ pub struct ReceiverTotals {
     pub foreign: u64,
     pub reports_sent: u64,
     pub report_errors: u64,
-    /// Decoder reopens at a changed picture header (a sender bpp change).
+    /// Picture header changes (sender bpp changes; a header seen before reuses its decoder,
+    /// vstack #20).
     pub header_changes: u64,
+    /// Decoders opened from a whole frame (the first frame, a bpp not seen recently, a recovery).
+    pub decoder_opens: u64,
     /// Decoded frames dropped because the caller did not poll in time.
     pub dropped_unread: u64,
     /// Datagrams the FEC rebuilt (issue 1387 item 3).
@@ -134,8 +137,9 @@ impl ReceiverTotals {
 /// only makes the receiver `Send`).
 #[derive(Default)]
 struct Outbox {
-    /// Every finished frame: its report, when it was decoded, whether it decoded.
-    events: Vec<(FrameReport, i64, bool)>,
+    /// Every finished frame: its report, when it was decoded, whether it decoded, and whether it
+    /// came through a decoder open from the whole frame (vstack #21).
+    events: Vec<(FrameReport, i64, bool, bool)>,
     ready: VecDeque<DecodedFrame>,
     /// Plane buffers to reuse.
     pool: Vec<YuvPlanes>,
@@ -176,7 +180,26 @@ impl Outbox {
     }
 }
 
-type Callback = Box<dyn FnMut(&FrameReport, Option<&YuvPlanes>) + Send>;
+type Callback = Box<dyn FnMut(&FrameReport, Option<&YuvPlanes>, bool) + Send>;
+
+/// Whether a decoded frame counts as late in the receiver report (`ReceiverReport::late_frames`,
+/// which steps the sender's bpp down). A frame decoded through a decoder open from the whole frame
+/// is late by the receiver's own init, not by the path: it never counts (vstack #21, camera-box
+/// #1536: the open after a bpp step up made that frame late, and the sender stepped straight back).
+pub(crate) fn reports_late(latency_ms: f64, late_ms: f64, opened: bool) -> bool {
+    !opened && latency_ms > late_ms
+}
+
+/// A decoded frame's decode time for the receiver report's p99 (us, from its last datagram to the
+/// decoded picture; both 100 ns). A frame decoded through a decoder open is the library init plus a
+/// whole-frame decode, not the steady decode the p99 describes: none (vstack #21).
+pub(crate) fn report_decode_us(
+    decoded_at_100ns: i64,
+    last_arrival_100ns: i64,
+    opened: bool,
+) -> Option<u32> {
+    (!opened).then(|| ((decoded_at_100ns - last_arrival_100ns).max(0) / 10) as u32)
+}
 
 /// One camera's JPEG XS receiver (see the module doc).
 pub struct JxsReceiver {
@@ -246,10 +269,10 @@ impl JxsReceiver {
         let sock = JxsRecvSocket::bind(cfg.listen)?;
         let out = Arc::new(Mutex::new(Outbox::default()));
         let sink_out = Arc::clone(&out);
-        let callback: Callback = Box::new(move |report, planes| {
+        let callback: Callback = Box::new(move |report, planes, opened| {
             let at = realtime_100ns();
             let mut o = lock(&sink_out);
-            o.events.push((*report, at, planes.is_some()));
+            o.events.push((*report, at, planes.is_some(), opened));
             if let Some(p) = planes {
                 o.decoded(report, at, p);
             }
@@ -279,6 +302,13 @@ impl JxsReceiver {
             fec: FecRepair::default(),
             rebuilt: Vec::with_capacity(jxs_link::DATAGRAM_LEN),
         })
+    }
+
+    /// The report the receiver has gathered since its last one, taken now (tests).
+    #[cfg(test)]
+    pub(crate) fn take_report(&mut self) -> jxs_link::ReceiverReport {
+        self.report
+            .take(self.camera.unwrap_or(0), self.cfg.max_bpp as u32)
     }
 
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
@@ -347,6 +377,7 @@ impl JxsReceiver {
         let mut t = self.totals;
         t.add_window(&self.window);
         t.header_changes = self.sink.header_changes;
+        t.decoder_opens = self.sink.opens;
         t.dropped_unread = lock(&self.out).dropped_unread;
         t
     }
@@ -470,7 +501,7 @@ impl JxsReceiver {
         let events = std::mem::take(&mut lock(&self.out).events);
         let ms = |t: i64| t as f64 / 10_000.0;
         let steps = self.wall_steps.steps_100ns();
-        for (r, decoded_at, ok) in &events {
+        for (r, decoded_at, ok, opened) in &events {
             let tc = r.timecode as i64;
             self.meter.note_frame(
                 r.timecode,
@@ -486,12 +517,12 @@ impl JxsReceiver {
                     ms(r.last_arrival - r.first_arrival),
                     r.lost_slices,
                 );
-                let decode_us = ((decoded_at - r.last_arrival).max(0) / 10) as u32;
+                let decode_us = report_decode_us(*decoded_at, r.last_arrival, *opened);
                 self.report.note_frame(
                     r.lost_slices,
                     r.timecode,
-                    latency_ms > self.cfg.late_ms,
-                    Some(decode_us),
+                    reports_late(latency_ms, self.cfg.late_ms, *opened),
+                    decode_us,
                 );
             } else {
                 self.window.undecodable_frames += 1;
@@ -550,6 +581,26 @@ impl JxsReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_decoded_through_an_open_is_never_reported_late() {
+        // vstack #21: late by its own init, not by the path
+        assert!(reports_late(40.0, 33.0, false));
+        assert!(!reports_late(40.0, 33.0, true));
+        assert!(
+            !reports_late(33.0, 33.0, false),
+            "exactly the bound is in time"
+        );
+        assert!(!reports_late(20.0, 33.0, false));
+    }
+
+    #[test]
+    fn an_opened_frame_adds_no_decode_time_and_the_others_their_own_in_microseconds() {
+        assert_eq!(report_decode_us(1_000_350, 1_000_000, false), Some(35));
+        assert_eq!(report_decode_us(1_000_350, 1_000_000, true), None);
+        // a clock that reads the decode before the last datagram: zero, never negative
+        assert_eq!(report_decode_us(1_000_000, 1_000_350, false), Some(0));
+    }
 
     /// Live 31.10.2026: the strih program input on stream-snv holds 1087 ms in its genlock FIFO
     /// and read every frame decoded over 100 ms after its timecode as late, stepping the program

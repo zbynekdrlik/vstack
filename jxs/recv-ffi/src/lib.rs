@@ -24,7 +24,7 @@ use svt_jpegxs_sys::ChromaFormat;
 pub use jxs_send_ffi;
 
 /// `CBJXS_ABI_VERSION` of `include/camera_box_jxs.h`.
-pub const CBJXS_ABI_VERSION: u32 = 4;
+pub const CBJXS_ABI_VERSION: u32 = 5;
 
 /// `cbjxs_frame.chroma` (`CBJXS_CHROMA_*`; the same numbers as the sender's `CBJXS_SEND_I420` /
 /// `_I422` / `_I444`).
@@ -109,7 +109,8 @@ pub struct CbjxsStats {
     pub reserved: [u8; 7],
     /// ABI 3: the speed of the link the slices arrive on (Mb/s, 0 = unknown).
     pub link_mbps: u32,
-    pub reserved2: u32,
+    /// Decoders opened from a whole frame (vstack #20; was `reserved2`, always 0 before).
+    pub decoder_opens: u32,
     /// ABI 3: datagrams the FEC parity rebuilt.
     pub fec_repaired: u64,
 }
@@ -310,7 +311,7 @@ pub unsafe extern "C" fn cbjxs_get_stats(rx: *const CbjxsReceiver, out: *mut Cbj
         camera_id: r.rx.camera().unwrap_or(0),
         reserved: [0; 7],
         link_mbps: r.rx.link_mbps().unwrap_or(0),
-        reserved2: 0,
+        decoder_opens: t.decoder_opens.min(u32::MAX as u64) as u32,
         fec_repaired: t.fec_repaired,
     };
     0
