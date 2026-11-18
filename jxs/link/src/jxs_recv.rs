@@ -566,6 +566,7 @@ mod tests {
     /// 4, then 5, then 4 again open two decoders, not three, and every frame decodes.
     /// Frames through a [`DecodeSink`]: (decoded, came through an open) per frame, and the sink's
     /// counters. `frames` = the packets of each frame (`None` = lost).
+    #[cfg(feature = "jxs")]
     fn run_sink(frames: &[Vec<Option<Vec<u8>>>]) -> (Vec<(bool, bool)>, u64, u64) {
         use crate::jxs_link::{FrameReport, SliceSink};
         let mut out = Vec::new();
@@ -594,6 +595,7 @@ mod tests {
         (out, errors, opens)
     }
 
+    #[cfg(feature = "jxs")]
     fn encoded_frame() -> Vec<Option<Vec<u8>>> {
         use svt_jpegxs_sys::{Encoder, EncoderSettings};
         let mut enc = Encoder::open(EncoderSettings::issue_1387(256, 64)).expect("encoder");
@@ -603,6 +605,7 @@ mod tests {
         packets
     }
 
+    #[cfg(feature = "jxs")]
     #[test]
     fn a_first_frame_that_cannot_open_is_an_error_and_the_next_whole_one_opens() {
         let good = encoded_frame();
@@ -622,6 +625,7 @@ mod tests {
         assert_eq!((errors, opens), (1, 1));
     }
 
+    #[cfg(feature = "jxs")]
     #[test]
     fn a_corrupt_slice_gives_the_decoder_up_and_the_next_frame_reopens() {
         let good = encoded_frame();
@@ -633,6 +637,7 @@ mod tests {
         assert_eq!((errors, opens), (1, 2));
     }
 
+    #[cfg(feature = "jxs")]
     #[test]
     fn a_swap_back_to_a_bpp_already_seen_reuses_its_decoder() {
         use crate::jxs_link::{FrameReport, SliceSink};
