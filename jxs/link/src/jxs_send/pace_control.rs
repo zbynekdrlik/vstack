@@ -42,6 +42,9 @@ pub struct PaceControl {
     own_iface: Option<String>,
     own_link_mbps: Option<u32>,
     receiver_link_mbps: Option<u32>,
+    /// The receiver link the congestion control's ceiling was learnt on: the last link a report
+    /// named, kept across reports that name none (vstack #17).
+    ceiling_link_mbps: Option<u32>,
     /// The geometry and bpp of the frames being sent (the safe start's frame spread).
     width: u32,
     height: u32,
@@ -80,6 +83,7 @@ impl PaceControl {
             own_iface,
             own_link_mbps: None,
             receiver_link_mbps: None,
+            ceiling_link_mbps: None,
             width: 0,
             height: 0,
             bpp: 0,
@@ -124,14 +128,17 @@ impl PaceControl {
         }
         self.last_report_seq = Some(r.seq);
         let link = (r.link_mbps > 0).then_some(r.link_mbps);
-        if link.is_some() && self.receiver_link_mbps.is_some() && link != self.receiver_link_mbps {
-            // vstack #17: the learnt ceiling belongs to the old link
-            self.congestion.link_changed();
-            tracing::info!(
-                "jxs send: receiver link {} -> {} Mb/s -- the pace ceiling starts over (vstack #17)",
-                self.receiver_link_mbps.unwrap_or(0),
-                r.link_mbps,
-            );
+        if let Some(new) = link {
+            if self.ceiling_link_mbps.is_some_and(|old| old != new) {
+                // vstack #17: the learnt ceiling belongs to the old link, also across a restart of
+                // the receiver that reported no link in between
+                self.congestion.link_changed();
+                tracing::info!(
+                    "jxs send: receiver link {} -> {new} Mb/s -- the pace ceiling starts over (vstack #17)",
+                    self.ceiling_link_mbps.unwrap_or(0),
+                );
+            }
+            self.ceiling_link_mbps = Some(new);
         }
         self.receiver_link_mbps = link;
         let own = self.own_delay_mean_us(r);
@@ -634,26 +641,36 @@ mod tests {
                 t,
             );
         };
-        // the full pace loses twice, 30 s apart: the ceiling one step under it
+        // the full pace loses in two episodes, 60 s apart: the ceiling one step under it
         send(&mut p, 2500, 3, 0.0);
-        for k in 1..30 {
+        for k in 1..60 {
             send(&mut p, 2500, 0, k as f64);
         }
         assert_eq!(p.congestion.factor_pct(), 100);
-        send(&mut p, 2500, 3, 30.0);
+        send(&mut p, 2500, 3, 60.0);
         assert_eq!(p.congestion.ceiling_pct(), 95);
-        send(&mut p, 2500, 0, 31.0);
+        send(&mut p, 2500, 0, 61.0);
         assert_eq!(p.congestion.ceiling_pct(), 95, "the same link keeps it");
-        send(&mut p, 0, 0, 32.0);
-        assert_eq!(p.congestion.ceiling_pct(), 95, "a link not named keeps it");
-        send(&mut p, 2500, 0, 33.0);
+        send(&mut p, 0, 0, 62.0);
         assert_eq!(
             p.congestion.ceiling_pct(),
             95,
-            "named again after none: kept"
+            "a report naming no link keeps it"
         );
-        send(&mut p, 1000, 0, 34.0);
-        assert_eq!(p.congestion.ceiling_pct(), 100, "another link: forgotten");
+        assert_eq!(p.receiver_link_mbps, None);
+        send(&mut p, 2500, 0, 63.0);
+        assert_eq!(
+            p.congestion.ceiling_pct(),
+            95,
+            "the same link after none: kept"
+        );
+        send(&mut p, 0, 0, 64.0);
+        send(&mut p, 1000, 0, 65.0);
+        assert_eq!(
+            p.congestion.ceiling_pct(),
+            100,
+            "another link after none (a receiver restart on a new NIC): forgotten"
+        );
         assert_eq!(p.receiver_link_mbps, Some(1000));
     }
 }

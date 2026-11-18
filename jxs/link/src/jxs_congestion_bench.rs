@@ -118,8 +118,9 @@ struct Outcome {
     pace_changes_after_30s: u32,
     /// Pace changes after 200 s (long after the download: the recovered link must settle).
     pace_changes_after_200s: u32,
-    /// Pace changes after 300 s.
+    /// Pace changes after 300 s and after 400 s.
     pace_changes_after_300s: u32,
+    pace_changes_after_400s: u32,
     first_jxs_drop_s: Option<f64>,
     /// Frames with any lost datagram while the download ran (60..120 s) and after 70 s.
     lossy_frames_download: u32,
@@ -224,6 +225,9 @@ fn run(sc: Scenario) -> Outcome {
             }
             if t_s >= 300.0 {
                 out.pace_changes_after_300s += 1;
+            }
+            if t_s >= 400.0 {
+                out.pace_changes_after_400s += 1;
             }
         }
         let code = 1920.0 * 1080.0 * bpp as f64 / 8.0;
@@ -375,13 +379,7 @@ const STRIH_TO_STREAM: Scenario = Scenario {
 
 #[test]
 fn the_link_survives_a_saturating_download_and_climbs_back() {
-    // vstack #17: a download that saws at the full pace twice, 33 s apart, reads like a receiver
-    // NIC that overflows there, so the pace waits one step under it until the first probe (600 s
-    // at the ceiling); the bpp is back at 8 long before. The run lasts past that probe.
-    let o = run(Scenario {
-        end_s: 800.0,
-        ..STRIH_TO_STREAM
-    });
+    let o = run(STRIH_TO_STREAM);
     eprintln!("{o:?}");
     assert_eq!(o.bpp_at_60s, 8, "the quiet link climbs to 8 bpp first");
     assert!(
@@ -649,8 +647,6 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
         encode_us: 11_800.0,
         cross_burst: Some((400_000.0, 14_000.0)),
         cross_burst_wander_us: 6_000.0,
-        // vstack #17: past the first probe (the full pace waits for it after a download)
-        end_s: 800.0,
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
@@ -671,7 +667,9 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
 /// slower than that, with a small RX ring. The receiver-link pace (90 % = 2250 Mb/s) overflows it.
 /// The congestion control cuts the pace, and the path is clean again. It must then HOLD under the
 /// level that overflowed. Climbing straight back to 2250 overflowed the NIC every minute or so,
-/// and each time the overflow also cost the box's Dante audio.
+/// and each time the overflow also cost the box's Dante audio. The first overflow alone could be a
+/// download (it lowers nothing); the second episode lowers the ceiling a step (2137 still
+/// overflows), the third another (2025 holds): learnt in three overflows, then held.
 #[test]
 fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
     let o = run(Scenario {
@@ -683,7 +681,7 @@ fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
         // the encoder's slices leave in bursts faster than any pace here: the pace sets the
         // burst rate on the wire
         encode_us: 4_000.0,
-        end_s: 500.0,
+        end_s: 900.0,
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
@@ -691,13 +689,13 @@ fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
         o.lossy_frames > 0,
         "the 2250 Mb/s pace really overflows the NIC"
     );
+    let s = &o.lossy_seconds_after_120s;
     assert!(
-        o.lossy_seconds_after_120s.is_empty(),
-        "learnt within two minutes, then no overflow: lossy seconds after 120 s {:?}",
-        o.lossy_seconds_after_120s
+        s.len() <= 2 && s.iter().all(|t| *t < 400),
+        "learnt within three overflows (the first before 120 s), none after 400 s: {s:?}"
     );
     assert_eq!(
-        o.pace_changes_after_200s, 0,
+        o.pace_changes_after_400s, 0,
         "the learnt pace holds, no sawtooth"
     );
     let (mbps, source) = o.pace_at_end;
@@ -712,8 +710,8 @@ fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
 
 /// vstack #17: the same NIC over an hour. The only overflows after the learning are the probes
 /// that look for a better path, and each failed one doubles the wait before the next: a NIC that
-/// cannot take more costs one probe drop per doubling wait (600, 1200, 2400 s), never the
-/// minute-by-minute overflow.
+/// cannot take more costs one probe drop per doubling wait (600, 1200, 2400 s after the learning),
+/// never the minute-by-minute overflow.
 #[test]
 fn over_an_hour_a_slow_receiver_nic_costs_only_the_doubling_probes() {
     let o = run(Scenario {
@@ -723,14 +721,20 @@ fn over_an_hour_a_slow_receiver_nic_costs_only_the_doubling_probes() {
         rx_link_mbps: 2500,
         cross: quiet,
         encode_us: 4_000.0,
-        end_s: 4_500.0,
+        end_s: 4_800.0,
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
-    let s = &o.lossy_seconds_after_120s;
+    let s: Vec<u32> = o
+        .lossy_seconds_after_120s
+        .iter()
+        .copied()
+        .filter(|t| *t >= 400)
+        .collect();
     assert_eq!(s.len(), 3, "one drop per failed probe: {s:?}");
-    // the first probe 600 s at the ceiling, then 1200 s, then 2400 s (plus the climb each time)
-    assert!((600..800).contains(&s[0]), "{s:?}");
+    // the first probe 600 s at the ceiling (learnt by ~350 s), then 1200 s, then 2400 s (plus the
+    // climb each time)
+    assert!((900..1100).contains(&s[0]), "{s:?}");
     assert!((1200..1300).contains(&(s[1] - s[0])), "{s:?}");
     assert!((2400..2500).contains(&(s[2] - s[1])), "{s:?}");
     assert_eq!(o.bpp_at_end, 8);
