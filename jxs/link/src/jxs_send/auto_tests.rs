@@ -334,7 +334,9 @@ fn the_sender_paces_to_the_link_the_receivers_report_names() {
     let w = window.expect("a status window within 12 s");
     assert_eq!(
         (w.pace_mbps, w.pace_source, w.rx_link_mbps, w.own_link_mbps),
-        (900, jxs_link::pace_auto::PaceSource::ReceiverLink, 1000, 0),
+        // vstack #18: the 256x64 frame's spread is far under the 1 GbE link's 90 %: the schedule's
+        // 100 Mb/s floor
+        (100, jxs_link::pace_auto::PaceSource::FrameSpread, 1000, 0),
         "{}",
         w.status_line()
     );

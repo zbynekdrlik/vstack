@@ -32,9 +32,12 @@ extern "C" {
 /* cbjxs_send_stats.pace_source: where the window's pace came from (issue 1387). */
 #define CBJXS_SEND_PACE_LINE_RATE 0u     /* the receiver's link is as fast as the sender's */
 #define CBJXS_SEND_PACE_FIXED 1u         /* cbjxs_send_config.pace_mbps above 0 */
-#define CBJXS_SEND_PACE_RECEIVER_LINK 2u /* 90 % of the receiver's slower link (its report) */
+#define CBJXS_SEND_PACE_RECEIVER_LINK 2u /* 90 % of the receiver's slower link (its report): the
+                                         * frame spread is not under it */
 #define CBJXS_SEND_PACE_START_SPREAD 3u  /* no receiver link known yet: the frame spread */
 #define CBJXS_SEND_PACE_CONGESTION 4u    /* the automatic pace lowered by the path's congestion */
+#define CBJXS_SEND_PACE_FRAME_SPREAD 5u  /* a slower receiver: each frame spread over half its
+                                         * interval (vstack #18) */
 
 /* cbjxs_send_stats.path_state: the path as the delay-based congestion control judged it last. */
 #define CBJXS_SEND_PATH_UNKNOWN 0u

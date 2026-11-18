@@ -8,10 +8,16 @@
 //! 1. **An explicit setting wins** (`CAMERA_BOX_JXS_PACE_MBPS` / the output's `jxs_pace_mbps` /
 //!    the C ABI's `pace_mbps` above 0): the override for a path the link speeds do not describe.
 //! 2. **The receiver's link is known:** slower than the sender's own link (or the sender's own
-//!    is unknown) = pace at [`LINK_PACE_PERCENT`] of it, the rest left to the port's other
-//!    traffic (1 GbE -> 900, the rate the 29.10.2026 23:35 live run carried at 8 bpp with no
-//!    loss; 2.5 GbE -> 2250). As fast or faster = line rate: nothing steps the burst down (a
-//!    1 GbE cambox to the 10 GbE strih keeps the owner's line-rate choice).
+//!    is unknown) = the FRAME SPREAD (vstack #18): the frame's wire bits over 1 /
+//!    [`START_SPREAD_DIVISOR`] of the frame interval, twice the stream's average, never above
+//!    [`LINK_PACE_PERCENT`] of the receiver's link (1 GbE -> 900, 2.5 GbE -> 2250), the rest of
+//!    the port left to its other traffic. In practice this is only the strih program output to a
+//!    stream box, which has no low-latency requirement (owner 18.11.2026: "Ak nieco nema
+//!    poziadavku na nizku latenciu tak je to stream pc"): spreading each frame keeps its burst far
+//!    under the receiver's link. Pacing at 90 % of a 2.5 GbE link overflowed a USB 2.5 GbE
+//!    receiver NIC and cost its Dante audio (camera-box#1534). No frame known yet = 90 % of the
+//!    link. As fast or faster = line rate: nothing steps the burst down (a 1 GbE cambox to the
+//!    10 GbE strih keeps the owner's line-rate choice: the camera links stay low-latency).
 //! 3. **No receiver link yet** (no report, or a version-1 receiver that does not send it): the
 //!    SAFE START = the frame-spread rate, the frame's own wire bits spread over
 //!    1 / [`START_SPREAD_DIVISOR`] of the frame interval (~520 Mb/s at 4 bpp 1080p30). Derived
@@ -42,8 +48,10 @@ pub const START_SPREAD_DIVISOR: u64 = 2;
 pub enum PaceSource {
     /// An explicit setting.
     Fixed,
-    /// [`LINK_PACE_PERCENT`] of the receiver's (slower) link.
+    /// [`LINK_PACE_PERCENT`] of the receiver's (slower) link: the frame spread is not under it.
     ReceiverLink,
+    /// The frame spread under a receiver's slower link (vstack #18).
+    FrameSpread,
     /// The receiver's link is as fast as the sender's, or the frame-spread rate is not below it.
     #[default]
     LineRate,
@@ -58,6 +66,7 @@ impl std::fmt::Display for PaceSource {
         f.write_str(match self {
             Self::Fixed => "fixed",
             Self::ReceiverLink => "receiver-link",
+            Self::FrameSpread => "frame-spread",
             Self::LineRate => "line-rate",
             Self::StartSpread => "start-spread",
             Self::Congestion => "congestion",
@@ -159,8 +168,16 @@ fn decide_links(i: &PaceInputs) -> PaceDecision {
         if i.own_link_mbps.is_some_and(|own| own <= rx) {
             return line;
         }
+        let link = rx as u64 * LINK_PACE_PERCENT / 100;
+        let spread = frame_spread_mbps(i.frame_wire_bytes, i.fps);
+        if spread > 0 && spread < link {
+            return PaceDecision {
+                mbps: clamp(spread),
+                source: PaceSource::FrameSpread,
+            };
+        }
         return PaceDecision {
-            mbps: clamp(rx as u64 * LINK_PACE_PERCENT / 100),
+            mbps: clamp(link),
             source: PaceSource::ReceiverLink,
         };
     }
@@ -212,19 +229,46 @@ mod tests {
     }
 
     #[test]
-    fn a_slower_receiver_link_is_paced_to_ninety_percent_of_it_on_any_venue() {
+    fn a_slower_receiver_link_spreads_each_frame_never_over_ninety_percent_of_it() {
+        // vstack #18 (owner 18.11.2026: the stream box has no low-latency requirement): a 4 bpp
+        // frame spread over half its interval, 579 Mb/s, under 90 % of either venue's link
         // strih-snv 10 GbE -> stream-snv 1 GbE (SNV)
         assert_eq!(
             at(Some(10_000), Some(1000)),
-            paced(900, PaceSource::ReceiverLink)
+            paced(579, PaceSource::FrameSpread)
         );
-        // strih-pp 10 GbE -> a 2.5 GbE receiver (PP): its own number, nothing hand-set
+        // strih-pp 10 GbE -> a 2.5 GbE receiver (PP): never the 2250 burst that overflowed its USB
+        // NIC (camera-box#1534)
         assert_eq!(
             at(Some(10_000), Some(2500)),
-            paced(2250, PaceSource::ReceiverLink)
+            paced(579, PaceSource::FrameSpread)
         );
-        // the sender's own link unknown (Wi-Fi, a tunnel): pace to the receiver anyway
-        assert_eq!(at(None, Some(1000)), paced(900, PaceSource::ReceiverLink));
+        // the sender's own link unknown (Wi-Fi, a tunnel): spread anyway
+        assert_eq!(at(None, Some(1000)), paced(579, PaceSource::FrameSpread));
+        // 8 bpp: 1153 Mb/s, over 90 % of 1 GbE (900 then), under it on 2.5 GbE
+        let eight = |rx| {
+            decide(&PaceInputs {
+                own_link_mbps: Some(10_000),
+                receiver_link_mbps: Some(rx),
+                frame_wire_bytes: frame_wire_bytes(1920, 1080, 8),
+                fps: 30,
+                ..PaceInputs::default()
+            })
+        };
+        assert_eq!(eight(1000), paced(900, PaceSource::ReceiverLink));
+        assert_eq!(eight(2500), paced(1153, PaceSource::FrameSpread));
+        // the spread (1153) over 90 % of the link (1152), equal to it (1153), then under it: the
+        // link's share until the spread is strictly under it
+        assert_eq!(eight(1281), paced(1152, PaceSource::ReceiverLink));
+        assert_eq!(eight(1282), paced(1153, PaceSource::ReceiverLink));
+        assert_eq!(eight(1283), paced(1153, PaceSource::FrameSpread));
+        // no frame known yet: the link's share
+        let none = decide(&PaceInputs {
+            own_link_mbps: Some(10_000),
+            receiver_link_mbps: Some(1000),
+            ..PaceInputs::default()
+        });
+        assert_eq!(none, paced(900, PaceSource::ReceiverLink));
         // a receiver on a 100 Mb/s link: the schedule's floor, the auto bpp does the rest
         assert_eq!(
             at(Some(1000), Some(100)),

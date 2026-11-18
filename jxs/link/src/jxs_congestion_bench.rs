@@ -71,6 +71,8 @@ struct Scenario {
     cross_burst_wander_us: f64,
     delay_signal: bool,
     end_s: f64,
+    /// An explicit pace setting (0 = automatic): replays a pace the automatic one no longer picks.
+    pace_setting_mbps: u32,
 }
 
 fn download(t_s: f64) -> f64 {
@@ -118,15 +120,16 @@ struct Outcome {
     pace_changes_after_30s: u32,
     /// Pace changes after 200 s (long after the download: the recovered link must settle).
     pace_changes_after_200s: u32,
-    /// Pace changes after 300 s and after 400 s.
+    /// Pace changes after 300 s.
     pace_changes_after_300s: u32,
-    pace_changes_after_400s: u32,
+    /// Pace changes after 60 s: the bpp is at 8 by then, and a frame-spread pace follows the bpp
+    /// until it is (vstack #18).
+    pace_changes_after_60s: u32,
     first_jxs_drop_s: Option<f64>,
     /// Frames with any lost datagram while the download ran (60..120 s) and after 70 s.
     lossy_frames_download: u32,
     lossy_frames_after_70s: u32,
-    /// Lossy frames after 120 s, and the seconds they fall in (vstack #17: a weak receiver NIC).
-    lossy_frames_after_120s: u32,
+    /// The seconds after 120 s with a lossy frame (camera-box#1534: a weak receiver NIC).
     lossy_seconds_after_120s: Vec<u32>,
     lossy_frames: u32,
     /// The largest share of one frame's datagrams lost.
@@ -183,7 +186,7 @@ fn run(sc: Scenario) -> Outcome {
         ..Outcome::default()
     };
     let mut auto = AutoBpp::new(AutoBppConfig::new(4, 8));
-    let mut pace = PaceControl::new(0, None);
+    let mut pace = PaceControl::new(sc.pace_setting_mbps, None);
     pace.set_own_link(Some(sc.sender_link_mbps as u32));
     let mut bpp = 4u32;
     auto.applied(bpp, TC0_100NS);
@@ -226,8 +229,8 @@ fn run(sc: Scenario) -> Outcome {
             if t_s >= 300.0 {
                 out.pace_changes_after_300s += 1;
             }
-            if t_s >= 400.0 {
-                out.pace_changes_after_400s += 1;
+            if t_s >= 60.0 {
+                out.pace_changes_after_60s += 1;
             }
         }
         let code = 1920.0 * 1080.0 * bpp as f64 / 8.0;
@@ -315,7 +318,6 @@ fn run(sc: Scenario) -> Outcome {
                 out.lossy_frames_after_70s += 1;
             }
             if t_s >= 120.0 {
-                out.lossy_frames_after_120s += 1;
                 let sec = t_s as u32;
                 if out.lossy_seconds_after_120s.last() != Some(&sec) {
                     out.lossy_seconds_after_120s.push(sec);
@@ -375,18 +377,12 @@ const STRIH_TO_STREAM: Scenario = Scenario {
     cross_burst_wander_us: 0.0,
     delay_signal: true,
     end_s: 420.0,
+    pace_setting_mbps: 0,
 };
 
 #[test]
 fn the_link_survives_a_saturating_download_and_climbs_back() {
-    // vstack #17: the download saws at the full pace twice, 33 s apart, which reads like a receiver
-    // NIC overflowing there, so the pace waits one step under it (855) until the first probe, 600
-    // clean seconds at the ceiling (a ceiling too low costs the program output only latency); the
-    // bpp is back at 8 long before. The run lasts past the probe.
-    let o = run(Scenario {
-        end_s: 800.0,
-        ..STRIH_TO_STREAM
-    });
+    let o = run(STRIH_TO_STREAM);
     eprintln!("{o:?}");
     assert_eq!(o.bpp_at_60s, 8, "the quiet link climbs to 8 bpp first");
     assert!(
@@ -465,6 +461,7 @@ fn a_line_rate_cambox_with_a_phase_sawtooth_and_clock_steps_never_reads_congesti
         cross_burst_wander_us: 0.0,
         delay_signal: true,
         end_s: 120.0,
+        pace_setting_mbps: 0,
     });
     eprintln!("{o:?}");
     assert_eq!(o.congestion_steps, 0, "never a congestion step");
@@ -519,7 +516,8 @@ fn the_programs_ndi_burst_sharing_the_port_is_not_congestion() {
     assert_eq!(o.bpp_at_60s, 8, "8 bpp within the first minute");
     assert_eq!(o.bpp_at_end, 8);
     assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
-    assert_eq!(o.pace_changes_after_30s, 0, "no pace sawtooth");
+    // vstack #18: the frame-spread pace follows the bpp's climb, then no change: no sawtooth
+    assert_eq!(o.pace_changes_after_60s, 0, "no pace sawtooth");
 }
 
 /// The same NDI burst plus the owner's saturating download: the link still backs off before the
@@ -643,7 +641,8 @@ fn an_ndi_burst_landing_at_a_varying_point_is_not_congestion() {
     assert_eq!(o.bpp_at_60s, 8, "8 bpp within the first minute");
     assert_eq!(o.bpp_at_end, 8);
     assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
-    assert_eq!(o.pace_changes_after_30s, 0, "no pace sawtooth");
+    // vstack #18: the frame-spread pace follows the bpp's climb, then no change: no sawtooth
+    assert_eq!(o.pace_changes_after_60s, 0, "no pace sawtooth");
 }
 
 /// The same varying burst plus the owner's saturating download: the link must still back off and
@@ -654,8 +653,6 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
         encode_us: 11_800.0,
         cross_burst: Some((400_000.0, 14_000.0)),
         cross_burst_wander_us: 6_000.0,
-        // vstack #17: past the first probe (the full pace waits for it after a download)
-        end_s: 800.0,
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
@@ -671,77 +668,51 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
     assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
 }
 
-/// vstack #17 (camera-box#1534, live 18.11.2026 on stream-snv): strih's 10 GbE output into a
-/// stream box whose USB 2.5 GbE NIC (RTL8156B, r8152) reports 2500 Mb/s but drains frame bursts
-/// slower than that, with a small RX ring. The receiver-link pace (90 % = 2250 Mb/s) overflows it.
-/// The congestion control cuts the pace, and the path is clean again. It must then HOLD under the
-/// level that overflowed. Climbing straight back to 2250 overflowed the NIC every minute or so,
-/// and each time the overflow also cost the box's Dante audio. The run ends before the first probe
-/// (600 clean seconds at the learnt ceiling).
+/// camera-box#1534 (live 18.11.2026 on stream-snv): strih's 10 GbE output into a stream box whose
+/// USB 2.5 GbE NIC (RTL8156B, r8152) reports 2500 Mb/s but drains frame bursts slower than that
+/// (modelled as 2000 Mb/s with a 150 KB ring). The encoder's slices leave in bursts faster than any
+/// pace here, so the pace sets the burst rate on the wire.
+const USB_NIC_STREAM: Scenario = Scenario {
+    sender_link_mbps: 10_000.0,
+    port_mbps: 2_000.0,
+    port_buffer_bytes: 150_000.0,
+    rx_link_mbps: 2500,
+    cross: quiet,
+    encode_us: 4_000.0,
+    end_s: 650.0,
+    ..STRIH_TO_STREAM
+};
+
+/// The pace the program output used to run on that path, 90 % of the 2.5 GbE link (2250 Mb/s),
+/// replayed as a fixed setting: it overflows the NIC again and again (the bench reproduces the
+/// live fault).
 #[test]
-fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
+fn the_old_ninety_percent_of_the_link_pace_overflows_a_usb_receiver_nic() {
     let o = run(Scenario {
-        sender_link_mbps: 10_000.0,
-        port_mbps: 2_000.0,
-        port_buffer_bytes: 150_000.0,
-        rx_link_mbps: 2500,
-        cross: quiet,
-        // the encoder's slices leave in bursts faster than any pace here: the pace sets the
-        // burst rate on the wire
-        encode_us: 4_000.0,
-        end_s: 650.0,
-        ..STRIH_TO_STREAM
+        pace_setting_mbps: 2250,
+        ..USB_NIC_STREAM
     });
     eprintln!("{o:?}");
     assert!(
-        o.lossy_frames > 0,
-        "the 2250 Mb/s pace really overflows the NIC"
-    );
-    assert!(
-        o.lossy_seconds_after_120s.is_empty(),
-        "learnt within two minutes, then no overflow: {:?}",
+        o.lossy_seconds_after_120s.len() >= 2,
+        "repeated overflows: {:?}",
         o.lossy_seconds_after_120s
-    );
-    assert_eq!(
-        o.pace_changes_after_400s, 0,
-        "the learnt pace holds, no sawtooth"
-    );
-    let (mbps, source) = o.pace_at_end;
-    assert_eq!(source, Some(PaceSource::Congestion));
-    // under the 2250 that overflowed, and not far under the NIC's 2000 (its 150 KB ring takes a
-    // frame's burst a few percent above the drain rate)
-    assert!(
-        (1700..2250).contains(&mbps),
-        "held under the level that overflowed, not far under the NIC: {mbps}"
     );
 }
 
-/// vstack #17: the same NIC over an hour. The only overflows after the learning are the probes
-/// that look for a better path, and each failed one doubles the wait before the next: a NIC that
-/// cannot take more costs one probe drop per doubling wait (600, 1200, 2400 s), never the
-/// minute-by-minute overflow.
+/// vstack #18 (owner 18.11.2026: the stream box has no low-latency requirement): the program
+/// output spreads each frame over half its interval (1153 Mb/s at 8 bpp), far under what the USB
+/// NIC drains: no loss, no congestion step, 8 bpp, the pace never needs a hand-set number.
 #[test]
-fn over_an_hour_a_slow_receiver_nic_costs_only_the_doubling_probes() {
+fn the_frame_spread_program_output_never_overflows_a_usb_receiver_nic() {
     let o = run(Scenario {
-        sender_link_mbps: 10_000.0,
-        port_mbps: 2_000.0,
-        port_buffer_bytes: 150_000.0,
-        rx_link_mbps: 2500,
-        cross: quiet,
-        encode_us: 4_000.0,
-        end_s: 4_800.0,
-        ..STRIH_TO_STREAM
+        end_s: 3_600.0,
+        ..USB_NIC_STREAM
     });
     eprintln!("{o:?}");
-    let s = &o.lossy_seconds_after_120s;
-    assert_eq!(s.len(), 3, "one drop per failed probe: {s:?}");
-    // the first probe 600 clean seconds at the ceiling, then 1200 s, then 2400 s (plus the climb
-    // each time)
-    assert!((600..800).contains(&s[0]), "{s:?}");
-    assert!((1200..1300).contains(&(s[1] - s[0])), "{s:?}");
-    assert!((2400..2500).contains(&(s[2] - s[1])), "{s:?}");
+    assert_eq!(o.lossy_frames, 0, "not one lossy frame in an hour");
+    assert_eq!(o.congestion_steps, 0);
     assert_eq!(o.bpp_at_end, 8);
-    let (mbps, source) = o.pace_at_end;
-    assert_eq!(source, Some(PaceSource::Congestion));
-    assert!((1700..2250).contains(&mbps), "{mbps}");
+    assert_eq!(o.pace_at_end, (1153, Some(PaceSource::FrameSpread)));
+    assert_eq!(o.pace_changes_after_60s, 0, "no pace sawtooth");
 }

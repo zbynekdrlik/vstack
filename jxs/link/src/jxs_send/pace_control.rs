@@ -42,9 +42,6 @@ pub struct PaceControl {
     own_iface: Option<String>,
     own_link_mbps: Option<u32>,
     receiver_link_mbps: Option<u32>,
-    /// The receiver link the congestion control's ceiling was learnt on: the last link a report
-    /// named, kept across reports that name none (vstack #17).
-    ceiling_link_mbps: Option<u32>,
     /// The geometry and bpp of the frames being sent (the safe start's frame spread).
     width: u32,
     height: u32,
@@ -83,7 +80,6 @@ impl PaceControl {
             own_iface,
             own_link_mbps: None,
             receiver_link_mbps: None,
-            ceiling_link_mbps: None,
             width: 0,
             height: 0,
             bpp: 0,
@@ -127,20 +123,7 @@ impl PaceControl {
             return;
         }
         self.last_report_seq = Some(r.seq);
-        let link = (r.link_mbps > 0).then_some(r.link_mbps);
-        if let Some(new) = link {
-            if self.ceiling_link_mbps.is_some_and(|old| old != new) {
-                // vstack #17: the learnt ceiling belongs to the old link, also across a restart of
-                // the receiver that reported no link in between
-                self.congestion.link_changed();
-                tracing::info!(
-                    "jxs send: receiver link {} -> {new} Mb/s -- the pace ceiling starts over (vstack #17)",
-                    self.ceiling_link_mbps.unwrap_or(0),
-                );
-            }
-            self.ceiling_link_mbps = Some(new);
-        }
-        self.receiver_link_mbps = link;
+        self.receiver_link_mbps = (r.link_mbps > 0).then_some(r.link_mbps);
         let own = self.own_delay_mean_us(r);
         let delay_unjudged = r.delay_mean_us.is_some() && own == OwnMean::Unjudged;
         self.queue_delay_us = match (r.delay_mean_us, own) {
@@ -185,14 +168,13 @@ impl PaceControl {
         self.congestion_pct = self.congestion.factor_pct();
         if step.changed || (step.state != before && step.state == PathState::Overuse) {
             tracing::info!(
-                "jxs send: path {} (queue_ms={} span_rx/tx_ms={}/{} lost_slices={}) -- pace factor {} % (ceiling {} %){} (issue 1387, vstack #17)",
+                "jxs send: path {} (queue_ms={} span_rx/tx_ms={}/{} lost_slices={}) -- pace factor {} %{} (issue 1387)",
                 step.state,
                 self.queue_delay_us.map_or("-".to_string(), |q| format!("{:.1}", q as f64 / 1000.0)),
                 r.span_p50_us.map_or("-".to_string(), |q| format!("{:.1}", q as f64 / 1000.0)),
                 send_span_us.map_or("-".to_string(), |q| format!("{:.1}", q as f64 / 1000.0)),
                 r.lost_slices,
                 self.congestion_pct,
-                self.congestion.ceiling_pct(),
                 if step.bpp_down { ", asks the auto bpp for a step down" } else { "" },
             );
         }
@@ -346,8 +328,9 @@ mod tests {
     }
 
     /// The strih output on 10 GbE to a stream box on 1 GbE: the safe start until the first
-    /// report, then 900 from the report, line rate when the receiver moves to a faster port, and
-    /// back to the safe start when a report says the link is unknown.
+    /// report, then the frame spread under the reported link (vstack #18), the link's 90 % once the
+    /// spread passes it, line rate when the receiver moves to a faster port, and back to the safe
+    /// start when a report says the link is unknown.
     #[test]
     fn the_pace_follows_the_receivers_report_and_changes_once_per_change() {
         let mut p = PaceControl::new(0, None);
@@ -361,12 +344,19 @@ mod tests {
         assert_eq!(
             p.changed(),
             Some(PaceDecision {
+                mbps: 579,
+                source: PaceSource::FrameSpread
+            })
+        );
+        // a bpp step moves the spread; 8 bpp passes the 1 GbE link's 90 %
+        p.on_frames(1920, 1080, 8);
+        assert_eq!(
+            p.changed(),
+            Some(PaceDecision {
                 mbps: 900,
                 source: PaceSource::ReceiverLink
             })
         );
-        // a bpp step does not move a link-derived pace
-        p.on_frames(1920, 1080, 8);
         assert_eq!(p.changed(), None);
         p.on_report_t(&report(10_000));
         assert_eq!(p.changed().map(|d| d.source), Some(PaceSource::LineRate));
@@ -380,7 +370,7 @@ mod tests {
         p.fill(&mut w);
         assert_eq!(
             (w.pace_mbps, w.pace_source, w.rx_link_mbps, w.own_link_mbps),
-            (2250, PaceSource::ReceiverLink, 2500, 10_000)
+            (1153, PaceSource::FrameSpread, 2500, 10_000)
         );
     }
 
@@ -620,57 +610,5 @@ mod tests {
         assert_eq!(queued[3], None);
         assert_eq!(queued[4], None);
         assert!(queued[6].is_some());
-    }
-
-    /// vstack #17: the learnt pace ceiling belongs to the receiver link it was learnt on. A
-    /// report naming ANOTHER link forgets it; the same link, or one that names none, keeps it.
-    #[test]
-    fn a_changed_receiver_link_forgets_the_learnt_ceiling() {
-        let mut p = PaceControl::new(0, None);
-        p.set_own_link(Some(10_000));
-        let mut seq = 0u32;
-        let mut send = |p: &mut PaceControl, link: u32, lost: u32, t: f64| {
-            seq += 1;
-            p.on_report(
-                &ReceiverReport {
-                    seq,
-                    lost_slices: lost,
-                    span_p50_us: Some(20_000),
-                    ..report(link)
-                },
-                t,
-            );
-        };
-        // two overuses at the full pace, 60 s apart: the ceiling one step under it
-        send(&mut p, 2500, 3, 0.0);
-        for k in 1..60 {
-            send(&mut p, 2500, 0, k as f64);
-        }
-        assert_eq!(p.congestion.factor_pct(), 100);
-        send(&mut p, 2500, 3, 60.0);
-        assert_eq!(p.congestion.ceiling_pct(), 95);
-        send(&mut p, 2500, 0, 61.0);
-        assert_eq!(p.congestion.ceiling_pct(), 95, "the same link keeps it");
-        send(&mut p, 0, 0, 62.0);
-        assert_eq!(
-            p.congestion.ceiling_pct(),
-            95,
-            "a report naming no link keeps it"
-        );
-        assert_eq!(p.receiver_link_mbps, None);
-        send(&mut p, 2500, 0, 63.0);
-        assert_eq!(
-            p.congestion.ceiling_pct(),
-            95,
-            "the same link after none: kept"
-        );
-        send(&mut p, 0, 0, 64.0);
-        send(&mut p, 1000, 0, 65.0);
-        assert_eq!(
-            p.congestion.ceiling_pct(),
-            100,
-            "another link after none (a receiver restart on a new NIC): forgotten"
-        );
-        assert_eq!(p.receiver_link_mbps, Some(1000));
     }
 }
