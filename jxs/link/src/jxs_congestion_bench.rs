@@ -709,3 +709,32 @@ fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
         "held under the level that overflowed, not far under the NIC: {mbps}"
     );
 }
+
+/// vstack #17: the same NIC over an hour. The only overflows after the learning are the probes
+/// that look for a better path, and each failed one doubles the wait before the next: a NIC that
+/// cannot take more costs one probe drop per doubling wait (600, 1200, 2400 s), never the
+/// minute-by-minute overflow.
+#[test]
+fn over_an_hour_a_slow_receiver_nic_costs_only_the_doubling_probes() {
+    let o = run(Scenario {
+        sender_link_mbps: 10_000.0,
+        port_mbps: 2_000.0,
+        port_buffer_bytes: 150_000.0,
+        rx_link_mbps: 2500,
+        cross: quiet,
+        encode_us: 4_000.0,
+        end_s: 4_500.0,
+        ..STRIH_TO_STREAM
+    });
+    eprintln!("{o:?}");
+    let s = &o.lossy_seconds_after_120s;
+    assert_eq!(s.len(), 3, "one drop per failed probe: {s:?}");
+    // the first probe 600 s at the ceiling, then 1200 s, then 2400 s (plus the climb each time)
+    assert!((600..800).contains(&s[0]), "{s:?}");
+    assert!((1200..1300).contains(&(s[1] - s[0])), "{s:?}");
+    assert!((2400..2500).contains(&(s[2] - s[1])), "{s:?}");
+    assert_eq!(o.bpp_at_end, 8);
+    let (mbps, source) = o.pace_at_end;
+    assert_eq!(source, Some(PaceSource::Congestion));
+    assert!((1700..2250).contains(&mbps), "{mbps}");
+}

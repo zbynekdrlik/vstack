@@ -51,7 +51,23 @@
 //!
 //! - **Clean** = queuing delay under `queue_clear_us`, no stretch, no loss. After
 //!   `clean_before_increase` clean reports in a row the factor climbs back `increase_step` per
-//!   clean report, up to 1. The bpp climbs back through the auto bpp's own clean-seconds rule.
+//!   clean report, up to the CEILING. The bpp climbs back through the auto bpp's own clean-seconds
+//!   rule.
+//! - **The ceiling** (vstack #17, camera-box#1534: a USB 2.5 GbE receiver NIC overflowed at the
+//!   2250 Mb/s receiver-link pace, the factor climbed back to 100 % within seconds and overflowed it
+//!   again every minute or so, each time also costing the box's Dante audio): an overuse with the
+//!   factor AT the ceiling (it had climbed all the way back) that REPEATS one from an earlier
+//!   episode -- the previous one at least `episode_gap_s` and at most `repeat_window_s` before --
+//!   lowers the ceiling to one climb step under that level, never under `min_factor`. A lone one
+//!   (a download now and then) leaves it, and so does a download's own sawing at the top a few
+//!   seconds apart (one episode), so the link still climbs all the way back after a download (the
+//!   bench's download scenarios). An overuse lower in a climb (a
+//!   download's second cut) never counts. The factor then converges to the highest level the path
+//!   held. After `probe_after_s` clean at the ceiling
+//!   it rises one step (a probe): a probe that over-uses doubles the wait (up to
+//!   `probe_after_max_s`), one that holds for the wait resets it, so a better path is found again
+//!   and a NIC that cannot take more costs one drop per doubling wait. [`Congestion::link_changed`]
+//!   forgets it (the ceiling belongs to the receiver link it was learnt on).
 //! - Between the two (a queue that neither grows past the overuse bound nor clears): hold.
 //! - No report, or a report whose delay fields were not measured (a version-1 receiver): hold.
 
@@ -128,6 +144,14 @@ pub struct CongestionConfig {
     pub bpp_after_overuse: u32,
     /// Seconds between two bpp steps the controller asks for.
     pub bpp_settle_s: f64,
+    /// Seconds clean at the ceiling before it rises one step (a probe).
+    pub probe_after_s: f64,
+    /// The longest wait between probes (each failed probe doubles it up to this).
+    pub probe_after_max_s: f64,
+    /// An overuse at the ceiling within this long of the previous one lowers the ceiling ...
+    pub repeat_window_s: f64,
+    /// ... unless they are closer than this (one congestion episode, a download's sawing).
+    pub episode_gap_s: f64,
 }
 
 impl Default for CongestionConfig {
@@ -143,6 +167,10 @@ impl Default for CongestionConfig {
             clean_before_increase: 5,
             bpp_after_overuse: 1,
             bpp_settle_s: 1.0,
+            probe_after_s: 600.0,
+            probe_after_max_s: 14_400.0,
+            repeat_window_s: 1_800.0,
+            episode_gap_s: 20.0,
         }
     }
 }
@@ -229,7 +257,7 @@ pub struct Congestion {
     stretch_history:
         std::collections::BTreeMap<Option<u32>, std::collections::VecDeque<(f64, i64)>>,
     /// Per send regime, the stretches of its last [`BASE_REPORTS`] reports judged at the FULL pace
-    /// (factor 1): their maximum is the quiet path's envelope, which a stretch must exceed by
+    /// (the factor at its ceiling, 1 unless a ceiling was learnt): their maximum is the quiet path's envelope, which a stretch must exceed by
     /// [`ENVELOPE_MARGIN_US`] (besides the bound over the base) to read overuse. Live 31.10.2026:
     /// the program's NDI frame lands at a varying point of the JPEG XS frame, so the quiet
     /// stretch varies report to report by up to the burst's own time on the port. Kept by count,
@@ -240,6 +268,16 @@ pub struct Congestion {
     /// since the first one: the steady clock the stretch base ages on is `now - congested_s`.
     last_report_s: Option<f64>,
     congested_s: f64,
+    /// The factor never climbs above this (module doc, vstack #17).
+    ceiling: f64,
+    /// The ceiling was raised by a probe that has not yet held for `probe_wait_s`.
+    probing: bool,
+    /// The wait at the ceiling before the next probe.
+    probe_wait_s: f64,
+    /// Since when the factor has been clean at the ceiling (`None` = not there).
+    at_ceiling_since_s: Option<f64>,
+    /// When the factor last over-used at the ceiling.
+    last_top_overuse_s: Option<f64>,
 }
 
 impl Default for Congestion {
@@ -262,6 +300,78 @@ impl Congestion {
             quiet_envelope: std::collections::BTreeMap::new(),
             last_report_s: None,
             congested_s: 0.0,
+            ceiling: 1.0,
+            probing: false,
+            probe_wait_s: cfg.probe_after_s,
+            at_ceiling_since_s: None,
+            last_top_overuse_s: None,
+        }
+    }
+
+    /// The ceiling the factor climbs back to (module doc).
+    pub fn ceiling(&self) -> f64 {
+        self.ceiling
+    }
+
+    /// The ceiling in whole percent.
+    pub fn ceiling_pct(&self) -> u32 {
+        (self.ceiling * 100.0).round().clamp(1.0, 100.0) as u32
+    }
+
+    /// The receiver's link changed (another NIC, a renegotiated port): what was learnt about the
+    /// old one is forgotten, the ceiling and the probe wait start over.
+    pub fn link_changed(&mut self) {
+        self.ceiling = 1.0;
+        self.probing = false;
+        self.probe_wait_s = self.cfg.probe_after_s;
+        self.at_ceiling_since_s = None;
+        self.last_top_overuse_s = None;
+    }
+
+    /// An overuse at `now_s` with the factor at `before` (module doc): a repeated one at the
+    /// ceiling (or a failed probe) drops the ceiling one step under it; a failed probe also doubles
+    /// the wait.
+    fn lower_ceiling(&mut self, before: f64, now_s: f64) {
+        let c = self.cfg;
+        self.at_ceiling_since_s = None;
+        if before < self.ceiling - 1e-9 {
+            return;
+        }
+        let repeat = self.probing
+            || self
+                .last_top_overuse_s
+                .is_some_and(|t| (c.episode_gap_s..=c.repeat_window_s).contains(&(now_s - t)));
+        self.last_top_overuse_s = Some(now_s);
+        if !repeat {
+            return;
+        }
+        if self.probing {
+            self.probe_wait_s = (self.probe_wait_s * 2.0).min(c.probe_after_max_s);
+            self.probing = false;
+        }
+        self.ceiling = (before - c.increase_step).max(c.min_factor);
+    }
+
+    /// A clean report at `now_s` with the factor at the ceiling: after the wait, a probe.
+    fn probe(&mut self, now_s: f64) {
+        let c = self.cfg;
+        if self.factor < self.ceiling - 1e-9 {
+            return;
+        }
+        let since = *self.at_ceiling_since_s.get_or_insert(now_s);
+        if now_s - since < self.probe_wait_s {
+            return;
+        }
+        if self.probing {
+            // the last probe held for the whole wait
+            self.probe_wait_s = c.probe_after_s;
+        }
+        self.at_ceiling_since_s = Some(now_s);
+        if self.ceiling < 1.0 {
+            self.ceiling = (self.ceiling + c.increase_step).min(1.0);
+            self.probing = true;
+        } else {
+            self.probing = false;
         }
     }
 
@@ -324,7 +434,9 @@ impl Congestion {
         let envelope = quiet.iter().copied().max();
         let over = (stretch - b) as f64 > bound
             && envelope.is_none_or(|e| stretch - e > ENVELOPE_MARGIN_US);
-        if self.factor >= 1.0 {
+        // the full pace is the ceiling's (vstack #17): a path held under a learnt ceiling keeps
+        // feeding its envelope
+        if self.factor >= self.ceiling - 1e-9 {
             quiet.push_back(stretch);
             while quiet.len() > BASE_REPORTS {
                 quiet.pop_front();
@@ -354,6 +466,7 @@ impl Congestion {
         if delay_over || r.lost_slices > 0 {
             self.state = PathState::Overuse;
             self.clean_streak = 0;
+            self.lower_ceiling(before, now_s);
             self.factor = (self.factor * c.decrease).max(c.min_factor);
             let mut bpp_down = false;
             if delay_over {
@@ -388,8 +501,9 @@ impl Congestion {
             self.state = PathState::Clean;
             self.clean_streak += 1;
             if self.clean_streak >= c.clean_before_increase {
-                self.factor = (self.factor + c.increase_step).min(1.0);
+                self.factor = (self.factor + c.increase_step).min(self.ceiling);
             }
+            self.probe(now_s);
         } else {
             self.state = if measured {
                 PathState::Hold
@@ -801,5 +915,203 @@ mod tests {
             PathState::Overuse,
             "past the envelope by more than the margin"
         );
+    }
+
+    /// vstack #17: an overuse report (a queue) at second `t` (seq = t), and clean ones.
+    fn over_at(c: &mut Congestion, t: u32) -> CongestionStep {
+        c.on_report(&rep(t, 6_000, 20_000, 20_000), t as f64)
+    }
+
+    fn clean_to(c: &mut Congestion, from: u32, to: u32) {
+        for t in from..=to {
+            let s = c.on_report(&rep(t, 0, 20_000, 20_000), t as f64);
+            assert_eq!(s.state, PathState::Clean, "clean report {t}");
+        }
+    }
+
+    fn near(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    /// The default controller after one learnt step: overuses at 0 s and 61 s at the full pace,
+    /// so the ceiling is 0.95, and the factor is back at it from 67 s.
+    fn learnt() -> Congestion {
+        let mut c = Congestion::default();
+        over_at(&mut c, 0);
+        clean_to(&mut c, 1, 60);
+        over_at(&mut c, 61);
+        c
+    }
+
+    #[test]
+    fn a_repeated_overuse_at_the_top_lowers_the_ceiling_one_step_and_the_climb_stops_there() {
+        let mut c = Congestion::default();
+        assert!(near(c.ceiling(), 1.0));
+        assert_eq!(c.ceiling_pct(), 100);
+        // camera-box#1534: the full pace overflows the NIC; once may be a download
+        assert!(near(over_at(&mut c, 1).factor, 0.85));
+        assert!(near(c.ceiling(), 1.0), "a lone overuse keeps the ceiling");
+        clean_to(&mut c, 2, 60);
+        assert!(near(c.factor(), 1.0));
+        // the same overflow again: the ceiling one step under it
+        assert!(near(over_at(&mut c, 61).factor, 0.85));
+        assert!(near(c.ceiling(), 0.95));
+        assert_eq!(c.ceiling_pct(), 95);
+        clean_to(&mut c, 62, 120);
+        assert!(
+            near(c.factor(), 0.95),
+            "held at the ceiling: {}",
+            c.factor()
+        );
+        assert_eq!(c.factor_pct(), 95);
+        // the ceiling over-uses too: one step lower again
+        assert!(near(over_at(&mut c, 121).factor, 0.95 * 0.85));
+        assert!(near(c.ceiling(), 0.90));
+        clean_to(&mut c, 122, 180);
+        assert!(near(c.factor(), 0.90));
+    }
+
+    #[test]
+    fn overuses_at_the_top_further_apart_than_the_window_keep_the_ceiling() {
+        let mut c = Congestion::default();
+        over_at(&mut c, 0);
+        clean_to(&mut c, 1, 1800);
+        over_at(&mut c, 1801);
+        assert!(near(c.ceiling(), 1.0), "1801 s apart: two downloads");
+        clean_to(&mut c, 1802, 1900);
+        // exactly the window apart still counts as a repeat
+        over_at(&mut c, 3601);
+        assert!(near(c.ceiling(), 0.95));
+    }
+
+    #[test]
+    fn overuses_at_the_top_closer_than_the_episode_gap_are_one_episode() {
+        // a download saws at the top a few seconds apart: no repeat
+        let mut c = Congestion::default();
+        over_at(&mut c, 0);
+        clean_to(&mut c, 1, 8); // back at 1.0 at 7 s
+        over_at(&mut c, 19);
+        assert!(near(c.ceiling(), 1.0), "19 s apart: one episode");
+        clean_to(&mut c, 20, 38);
+        // exactly the gap after the previous one is a repeat
+        over_at(&mut c, 39);
+        assert!(near(c.ceiling(), 0.95));
+    }
+
+    #[test]
+    fn an_overuse_lower_in_a_climb_never_counts() {
+        // a download: three cuts in a row are one overuse at the top
+        let mut c = Congestion::default();
+        over_at(&mut c, 1);
+        over_at(&mut c, 2);
+        over_at(&mut c, 3);
+        assert!(near(c.factor(), 0.85 * 0.85 * 0.85));
+        assert!(near(c.ceiling(), 1.0));
+        // with a ceiling learnt: an overuse under it, mid-climb, keeps it
+        let mut c = learnt();
+        clean_to(&mut c, 62, 66); // 0.90 at 66 s
+        assert!(near(c.factor(), 0.90));
+        over_at(&mut c, 67);
+        assert!(near(c.ceiling(), 0.95));
+        clean_to(&mut c, 68, 120);
+        assert!(near(c.factor(), 0.95));
+    }
+
+    #[test]
+    fn the_ceiling_never_falls_under_the_factor_floor() {
+        let mut c = Congestion::default();
+        let mut t = 1;
+        for _ in 0..20 {
+            over_at(&mut c, t);
+            clean_to(&mut c, t + 1, t + 30);
+            t += 31;
+        }
+        assert!(near(c.ceiling(), 0.5));
+        assert!(near(c.factor(), 0.5));
+    }
+
+    #[test]
+    fn a_probe_raises_the_ceiling_after_the_wait_and_a_failed_one_doubles_it() {
+        let mut c = learnt();
+        clean_to(&mut c, 62, 666); // at the ceiling 0.95 from 67 s
+        assert!(near(c.ceiling(), 0.95), "the wait is 600 s from 67 s");
+        clean_to(&mut c, 667, 667);
+        assert!(near(c.ceiling(), 1.0), "the probe");
+        clean_to(&mut c, 668, 668);
+        assert!(near(c.factor(), 1.0));
+        // the probe level over-uses: a failed probe lowers at once, the next wait is 1200 s
+        over_at(&mut c, 700);
+        assert!(near(c.ceiling(), 0.95));
+        clean_to(&mut c, 701, 1905); // at 0.95 from 706 s
+        assert!(near(c.ceiling(), 0.95), "no probe before 1200 s");
+        clean_to(&mut c, 1906, 1907);
+        assert!(near(c.ceiling(), 1.0), "the second probe, 1200 s on");
+        assert!(near(c.factor(), 1.0));
+        // this one holds for its wait: probing ends and the wait resets to 600 s
+        clean_to(&mut c, 1908, 3106);
+        over_at(&mut c, 3200);
+        assert!(
+            near(c.ceiling(), 1.0),
+            "after a probe that held, a lone overuse is no failed probe"
+        );
+        clean_to(&mut c, 3201, 3299);
+        over_at(&mut c, 3300); // the repeat: 0.95
+        assert!(near(c.ceiling(), 0.95));
+        clean_to(&mut c, 3301, 3905); // at 0.95 from 3306 s
+        assert!(near(c.ceiling(), 0.95));
+        clean_to(&mut c, 3906, 3906);
+        assert!(near(c.ceiling(), 1.0), "600 s again");
+    }
+
+    #[test]
+    fn failed_probes_double_the_wait_up_to_its_cap() {
+        let mut c = Congestion::new(CongestionConfig {
+            probe_after_s: 10.0,
+            probe_after_max_s: 25.0,
+            episode_gap_s: 5.0,
+            ..CongestionConfig::default()
+        });
+        over_at(&mut c, 0);
+        clean_to(&mut c, 1, 10);
+        over_at(&mut c, 11); // the ceiling 0.95, reached at 17 s
+        clean_to(&mut c, 12, 26);
+        assert!(near(c.ceiling(), 0.95));
+        clean_to(&mut c, 27, 28); // the probe at 27 s, the top at 28 s
+        assert!(near(c.factor(), 1.0));
+        over_at(&mut c, 29); // failed: the wait is 20 s
+        clean_to(&mut c, 30, 54); // at 0.95 from 35 s
+        assert!(near(c.ceiling(), 0.95), "no probe before 20 s");
+        clean_to(&mut c, 55, 56);
+        assert!(near(c.factor(), 1.0), "probed at 55 s");
+        over_at(&mut c, 57); // failed again: 40 s, capped at 25 s
+        clean_to(&mut c, 58, 87); // at 0.95 from 63 s
+        assert!(near(c.ceiling(), 0.95), "no probe before 25 s");
+        clean_to(&mut c, 88, 88);
+        assert!(near(c.ceiling(), 1.0), "the cap: 25 s, not 40 s");
+    }
+
+    #[test]
+    fn a_changed_receiver_link_forgets_the_ceiling_the_wait_and_the_last_overuse() {
+        let mut c = learnt();
+        clean_to(&mut c, 62, 668); // the probe at 667 s, the top at 668 s
+        over_at(&mut c, 669); // failed: the wait is 1200 s, the ceiling 0.95
+        assert!(near(c.ceiling(), 0.95));
+        c.link_changed();
+        assert!(near(c.ceiling(), 1.0));
+        assert!(near(c.factor(), 0.85), "the factor itself is kept");
+        clean_to(&mut c, 670, 700);
+        assert!(near(c.factor(), 1.0));
+        over_at(&mut c, 701);
+        assert!(
+            near(c.ceiling(), 1.0),
+            "the new link's first overuse is a lone one"
+        );
+        clean_to(&mut c, 702, 760);
+        over_at(&mut c, 761); // the repeat: 0.95, the wait 600 s, not 1200 s
+        assert!(near(c.ceiling(), 0.95));
+        clean_to(&mut c, 762, 1366); // at 0.95 from 767 s
+        assert!(near(c.ceiling(), 0.95));
+        clean_to(&mut c, 1367, 1367);
+        assert!(near(c.ceiling(), 1.0), "600 s after a link change");
     }
 }

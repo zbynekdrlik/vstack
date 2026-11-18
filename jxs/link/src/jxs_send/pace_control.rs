@@ -123,7 +123,17 @@ impl PaceControl {
             return;
         }
         self.last_report_seq = Some(r.seq);
-        self.receiver_link_mbps = (r.link_mbps > 0).then_some(r.link_mbps);
+        let link = (r.link_mbps > 0).then_some(r.link_mbps);
+        if link.is_some() && self.receiver_link_mbps.is_some() && link != self.receiver_link_mbps {
+            // vstack #17: the learnt ceiling belongs to the old link
+            self.congestion.link_changed();
+            tracing::info!(
+                "jxs send: receiver link {} -> {} Mb/s -- the pace ceiling starts over (vstack #17)",
+                self.receiver_link_mbps.unwrap_or(0),
+                r.link_mbps,
+            );
+        }
+        self.receiver_link_mbps = link;
         let own = self.own_delay_mean_us(r);
         let delay_unjudged = r.delay_mean_us.is_some() && own == OwnMean::Unjudged;
         self.queue_delay_us = match (r.delay_mean_us, own) {
@@ -168,13 +178,14 @@ impl PaceControl {
         self.congestion_pct = self.congestion.factor_pct();
         if step.changed || (step.state != before && step.state == PathState::Overuse) {
             tracing::info!(
-                "jxs send: path {} (queue_ms={} span_rx/tx_ms={}/{} lost_slices={}) -- pace factor {} %{} (issue 1387)",
+                "jxs send: path {} (queue_ms={} span_rx/tx_ms={}/{} lost_slices={}) -- pace factor {} % (ceiling {} %){} (issue 1387, vstack #17)",
                 step.state,
                 self.queue_delay_us.map_or("-".to_string(), |q| format!("{:.1}", q as f64 / 1000.0)),
                 r.span_p50_us.map_or("-".to_string(), |q| format!("{:.1}", q as f64 / 1000.0)),
                 send_span_us.map_or("-".to_string(), |q| format!("{:.1}", q as f64 / 1000.0)),
                 r.lost_slices,
                 self.congestion_pct,
+                self.congestion.ceiling_pct(),
                 if step.bpp_down { ", asks the auto bpp for a step down" } else { "" },
             );
         }
@@ -602,5 +613,47 @@ mod tests {
         assert_eq!(queued[3], None);
         assert_eq!(queued[4], None);
         assert!(queued[6].is_some());
+    }
+
+    /// vstack #17: the learnt pace ceiling belongs to the receiver link it was learnt on. A
+    /// report naming ANOTHER link forgets it; the same link, or one that names none, keeps it.
+    #[test]
+    fn a_changed_receiver_link_forgets_the_learnt_ceiling() {
+        let mut p = PaceControl::new(0, None);
+        p.set_own_link(Some(10_000));
+        let mut seq = 0u32;
+        let mut send = |p: &mut PaceControl, link: u32, lost: u32, t: f64| {
+            seq += 1;
+            p.on_report(
+                &ReceiverReport {
+                    seq,
+                    lost_slices: lost,
+                    span_p50_us: Some(20_000),
+                    ..report(link)
+                },
+                t,
+            );
+        };
+        // the full pace loses twice, 30 s apart: the ceiling one step under it
+        send(&mut p, 2500, 3, 0.0);
+        for k in 1..30 {
+            send(&mut p, 2500, 0, k as f64);
+        }
+        assert_eq!(p.congestion.factor_pct(), 100);
+        send(&mut p, 2500, 3, 30.0);
+        assert_eq!(p.congestion.ceiling_pct(), 95);
+        send(&mut p, 2500, 0, 31.0);
+        assert_eq!(p.congestion.ceiling_pct(), 95, "the same link keeps it");
+        send(&mut p, 0, 0, 32.0);
+        assert_eq!(p.congestion.ceiling_pct(), 95, "a link not named keeps it");
+        send(&mut p, 2500, 0, 33.0);
+        assert_eq!(
+            p.congestion.ceiling_pct(),
+            95,
+            "named again after none: kept"
+        );
+        send(&mut p, 1000, 0, 34.0);
+        assert_eq!(p.congestion.ceiling_pct(), 100, "another link: forgotten");
+        assert_eq!(p.receiver_link_mbps, Some(1000));
     }
 }
