@@ -334,7 +334,8 @@ impl Congestion {
     fn lower_ceiling(&mut self, before: f64, now_s: f64) {
         let c = self.cfg;
         self.at_ceiling_since_s = None;
-        if before < self.ceiling - 1e-9 {
+        // exact: the climb stops AT the ceiling (`min`), so a factor at the top equals it
+        if before < self.ceiling {
             return;
         }
         let repeat = self.probing
@@ -355,7 +356,7 @@ impl Congestion {
     /// A clean report at `now_s` with the factor at the ceiling: after the wait, a probe.
     fn probe(&mut self, now_s: f64) {
         let c = self.cfg;
-        if self.factor < self.ceiling - 1e-9 {
+        if self.factor < self.ceiling {
             return;
         }
         let since = *self.at_ceiling_since_s.get_or_insert(now_s);
@@ -436,7 +437,7 @@ impl Congestion {
             && envelope.is_none_or(|e| stretch - e > ENVELOPE_MARGIN_US);
         // the full pace is the ceiling's (vstack #17): a path held under a learnt ceiling keeps
         // feeding its envelope
-        if self.factor >= self.ceiling - 1e-9 {
+        if self.factor >= self.ceiling {
             quiet.push_back(stretch);
             while quiet.len() > BASE_REPORTS {
                 quiet.pop_front();
@@ -996,6 +997,37 @@ mod tests {
         // exactly the gap after the previous one is a repeat
         over_at(&mut c, 39);
         assert!(near(c.ceiling(), 0.95));
+    }
+
+    #[test]
+    fn an_overuse_under_the_ceiling_never_counts_even_an_episode_later() {
+        // a download's cut, then another 24 s on with the factor still down: no repeat at the top
+        let mut c = Congestion::default();
+        over_at(&mut c, 1);
+        over_at(&mut c, 25);
+        assert!(near(c.ceiling(), 1.0));
+        // with a ceiling learnt (0.95 at 61 s): 0.90 at 66 s, an overuse at 90 s under it
+        let mut c = learnt();
+        clean_to(&mut c, 62, 66);
+        over_at(&mut c, 90);
+        assert!(near(c.ceiling(), 0.95), "under the ceiling: kept");
+    }
+
+    #[test]
+    fn a_stretch_exactly_the_margin_over_its_envelope_is_not_over_use() {
+        // quiet stretches 4 ms and 7 ms at the full pace: base 4 ms, envelope 7 ms; then one
+        // report 3.5 ms over the base (> the 3 ms bound) and `over` us over the envelope
+        let judge = |over: u32| {
+            let mut c = Congestion::default();
+            let tx = 20_000;
+            for (k, st) in [(1, 4_000), (2, 7_000), (3, 4_000)] {
+                let s = c.on_report(&rep(k, 0, tx + st, tx), k as f64);
+                assert_ne!(s.state, PathState::Overuse, "quiet report {k}");
+            }
+            c.on_report(&rep(4, 0, tx + 7_000 + over, tx), 4.0).state
+        };
+        assert_ne!(judge(500), PathState::Overuse, "exactly the margin");
+        assert_eq!(judge(501), PathState::Overuse);
     }
 
     #[test]
