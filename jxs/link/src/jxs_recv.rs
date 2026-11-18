@@ -287,9 +287,11 @@ mod decode {
     /// measured 0.15 ms after the last slice; a frame the library still waits on never ends).
     pub const FINISH_TIMEOUT: Duration = Duration::from_millis(200);
 
-    /// Decoders kept for picture headers seen before (vstack #20): the auto bpp swaps between
-    /// neighbouring levels, so a handful covers every swap after the first visit.
-    pub const DECODER_CACHE: usize = 4;
+    /// Decoders kept for picture headers seen before (vstack #20): the auto bpp steps one level at a
+    /// time, so the two levels next to the current one cover every swap after the first visit.
+    /// Each kept 1080p decoder holds ~13.6 MB and 2 idle library threads (measured 18.11.2026:
+    /// 1 -> 5 open decoders, RSS 24 -> 79 MB, threads 7 -> 15), per camera input.
+    pub const DECODER_CACHE: usize = 2;
 
     /// The receiver's [`SliceSink`]: decodes packet by packet, conceals lost packets from the
     /// previous frame, and reports every frame to `on_frame` (`None` planes = not decoded; the
@@ -313,8 +315,8 @@ mod decode {
         count: usize,
         /// The last picture header packet (index 0) that arrived, decoder open or not. A frame
         /// whose header differs (a bpp change: the header carries the codestream length `Lcod`)
-        /// forgets the concealment source and reopens an open decoder from that frame (issue
-        /// 1387).
+        /// forgets the concealment source and takes that header's kept decoder, else opens one from
+        /// that frame (issue 1387, vstack #20).
         last_header: Vec<u8>,
         /// The decoders of other picture headers seen before, oldest first (vstack #20): a swap
         /// back to one of them decodes at once, with no open from a whole frame.
@@ -459,6 +461,7 @@ mod decode {
                     self.count = count as usize;
                     self.dec = None;
                     self.cache.clear();
+                    self.last_header.clear();
                     self.has_prev.iter_mut().for_each(|h| *h = false);
                 }
                 if let Some(b) = bytes {
@@ -482,6 +485,8 @@ mod decode {
                                 }
                                 self.cache.push((std::mem::take(&mut self.last_header), d));
                             }
+                            // (a reused decoder starts with no concealment source: a loss in its
+                            // first frame gives it up and the next frame opens anew, as before)
                             if let Some(i) = self.cache.iter().position(|(hd, _)| hd == b) {
                                 self.dec = Some(self.cache.remove(i).1);
                             }

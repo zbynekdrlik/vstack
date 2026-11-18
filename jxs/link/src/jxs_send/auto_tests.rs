@@ -344,9 +344,9 @@ fn the_sender_paces_to_the_link_the_receivers_report_names() {
     assert!(w.frames > 0, "{}", w.status_line());
 }
 
-/// vstack #20/#21: real frames through a real receiver. Its report counts every decoded frame,
-/// none of them late (timecodes on the wall clock), with a real decode time: the first frame came
-/// through the decoder open and adds none, the others theirs (microseconds, not the library init).
+/// Real frames through a real receiver (a smoke test of the report path the vstack #21 rules sit
+/// in; `reports_late` / `report_decode_us` are tested on their own): the report counts every
+/// decoded frame, none late (timecodes on the wall clock), with a decode time in microseconds.
 #[cfg(feature = "jxs")]
 #[test]
 fn the_receivers_report_counts_the_decoded_frames_and_their_decode_time() {
@@ -385,6 +385,8 @@ fn the_receivers_report_counts_the_decoded_frames_and_their_decode_time() {
     }
     let r = rx.take_report();
     assert!(r.frames >= 5, "{r:?}");
+    let t = rx.totals();
+    assert_eq!((t.decoder_opens, t.header_changes), (1, 0), "{t:?}");
     assert_eq!(r.late_frames, 0, "{r:?}");
     assert_eq!(r.lost_slices, 0, "{r:?}");
     assert_ne!(

@@ -135,6 +135,8 @@ fn a_frame_sent_like_the_cambox_comes_out_of_the_c_abi_with_its_timecode_and_the
     let mut s = CbjxsStats::default();
     assert_eq!(unsafe { cbjxs_get_stats(rx, &mut s) }, 0);
     assert_eq!((s.frames, s.undecodable_frames, s.camera_id), (3, 0, 5));
+    // one bpp: one decoder opened, no header change (vstack #20)
+    assert_eq!((s.decoder_opens, s.header_changes), (1, 0), "{s:?}");
     assert!(s.reports_sent >= 1 && s.bytes > 0, "{s:?}");
     let mut e = [0 as std::ffi::c_char; 32];
     assert_eq!(unsafe { cbjxs_take_error(rx, e.as_mut_ptr(), e.len()) }, 0);

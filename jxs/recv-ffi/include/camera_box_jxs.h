@@ -69,14 +69,16 @@ typedef struct cbjxs_stats {
 	uint64_t foreign; /* datagrams of another camera id */
 	uint64_t reports_sent;
 	uint64_t report_errors;
-	uint64_t header_changes; /* decoder reopens at a sender bpp change */
+	uint64_t header_changes; /* picture header changes (sender bpp changes; a header seen before
+	                          * reuses its decoder, vstack #20) */
 	uint64_t dropped_unread; /* decoded frames the caller did not take in time */
 	uint8_t camera_id;       /* the camera being taken, 0 = none heard yet */
 	uint8_t reserved[7];
 	/* ABI 3: the speed of the link the slices arrive on (Mb/s, 0 = unknown), sent to the sender
 	 * in every report so it paces to it (issue 1387). */
 	uint32_t link_mbps;
-	uint32_t reserved2;
+	uint32_t decoder_opens; /* decoders opened from a whole frame (was reserved, 0 before vstack #20):
+	                         * a swap back to a recently seen bpp opens none */
 	uint64_t fec_repaired; /* ABI 3: datagrams the FEC parity rebuilt (issue 1387) */
 } cbjxs_stats;
 

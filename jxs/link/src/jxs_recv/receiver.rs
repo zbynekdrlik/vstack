@@ -104,8 +104,11 @@ pub struct ReceiverTotals {
     pub foreign: u64,
     pub reports_sent: u64,
     pub report_errors: u64,
-    /// Decoder reopens at a changed picture header (a sender bpp change).
+    /// Picture header changes (sender bpp changes; a header seen before reuses its decoder,
+    /// vstack #20).
     pub header_changes: u64,
+    /// Decoders opened from a whole frame (the first frame, a bpp not seen recently, a recovery).
+    pub decoder_opens: u64,
     /// Decoded frames dropped because the caller did not poll in time.
     pub dropped_unread: u64,
     /// Datagrams the FEC rebuilt (issue 1387 item 3).
@@ -374,6 +377,7 @@ impl JxsReceiver {
         let mut t = self.totals;
         t.add_window(&self.window);
         t.header_changes = self.sink.header_changes;
+        t.decoder_opens = self.sink.opens;
         t.dropped_unread = lock(&self.out).dropped_unread;
         t
     }
