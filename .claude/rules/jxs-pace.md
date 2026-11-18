@@ -6,6 +6,8 @@ paths:
   - "jxs/link/src/jxs_congestion_bench.rs"
   - "jxs/link/src/jxs_send/pace_control.rs"
   - "jxs/link/src/jxs_send/auto_tests.rs"
+  - "jxs/link/src/jxs_recv.rs"
+  - "jxs/link/src/jxs_recv/receiver.rs"
 ---
 
 # JPEG XS send pacing
@@ -16,3 +18,7 @@ paths:
 - **The sawtooth gate counts only congestion pace changes** (`congestion_pace_changes_after_30s`). A frame-spread pace also changes with every bpp step, and that is not a sawtooth.
 - `jxs_send::auto_tests` and the real packet-thread tests run only with `--all-features`. Plain `cargo test -p camera-box-jxs --lib` skips them.
 - **A new `PaceSource` needs four changes:** the C code in `jxs/send-ffi/src/lib.rs` (`pace_source_code`), its `#define` in `include/camera_box_jxs_send.h`, its pin in `send-ffi/tests/abi.rs`, and the `pace_text` and header doc wording. Tell obs, because its DistroAV output reads the codes.
+- **Spreading thinner costs download resilience.** In the bench, any program pace under 2x the frame rate (#23: 4/3, 3/2, 5/3, 1.1) lost frames during a saturating download on the stream PC, and kept losing after it. At 2x it lost 1 frame. The queue never drains between thinly spread frames, so the delay signal comes late. Check the download benches before changing the spread. Keep `jxs_congestion_bench`'s pace sweep pattern: temporarily replace rule 2's rate and read `lossy_frames_download` / `lossy_frames_after_70s`.
+- **The receiver keeps the decoders of the last `DECODER_CACHE` (2) bpp levels** (#20): a bpp swap must never reopen. Each kept 1080p decoder costs ~13.6 MB and 2 threads. A frame decoded through an open is never reported late (#21); otherwise the sender's auto bpp steps straight back on `receiver-late`.
+- **Codec-only tests in `jxs_recv.rs` need `#[cfg(feature = "jxs")]`.** CI's no-codec test and clippy jobs compile the crate without it.
+
