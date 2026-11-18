@@ -379,7 +379,14 @@ const STRIH_TO_STREAM: Scenario = Scenario {
 
 #[test]
 fn the_link_survives_a_saturating_download_and_climbs_back() {
-    let o = run(STRIH_TO_STREAM);
+    // vstack #17: the download saws at the full pace twice, 33 s apart, which reads like a receiver
+    // NIC overflowing there, so the pace waits one step under it (855) until the first probe, 600
+    // clean seconds at the ceiling (a ceiling too low costs the program output only latency); the
+    // bpp is back at 8 long before. The run lasts past the probe.
+    let o = run(Scenario {
+        end_s: 800.0,
+        ..STRIH_TO_STREAM
+    });
     eprintln!("{o:?}");
     assert_eq!(o.bpp_at_60s, 8, "the quiet link climbs to 8 bpp first");
     assert!(
@@ -647,6 +654,8 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
         encode_us: 11_800.0,
         cross_burst: Some((400_000.0, 14_000.0)),
         cross_burst_wander_us: 6_000.0,
+        // vstack #17: past the first probe (the full pace waits for it after a download)
+        end_s: 800.0,
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
@@ -688,12 +697,10 @@ fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
         o.lossy_frames > 0,
         "the 2250 Mb/s pace really overflows the NIC"
     );
-    // the learning: the repeat at the full pace lowers, 2137 still overflows, and a fast probe back
-    // to a level that had held 30 s fails once more (~140 s); then nothing
-    let s = &o.lossy_seconds_after_120s;
     assert!(
-        s.len() <= 1 && s.iter().all(|t| *t < 200),
-        "learnt within about two minutes, then no overflow: {s:?}"
+        o.lossy_seconds_after_120s.is_empty(),
+        "learnt within two minutes, then no overflow: {:?}",
+        o.lossy_seconds_after_120s
     );
     assert_eq!(
         o.pace_changes_after_400s, 0,
@@ -711,8 +718,8 @@ fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
 
 /// vstack #17: the same NIC over an hour. The only overflows after the learning are the probes
 /// that look for a better path, and each failed one doubles the wait before the next: a NIC that
-/// cannot take more costs one probe drop per doubling wait (1200, 2400 s after the learning's failed
-/// fast probe), never the minute-by-minute overflow.
+/// cannot take more costs one probe drop per doubling wait (600, 1200, 2400 s), never the
+/// minute-by-minute overflow.
 #[test]
 fn over_an_hour_a_slow_receiver_nic_costs_only_the_doubling_probes() {
     let o = run(Scenario {
@@ -727,14 +734,10 @@ fn over_an_hour_a_slow_receiver_nic_costs_only_the_doubling_probes() {
     });
     eprintln!("{o:?}");
     let s = &o.lossy_seconds_after_120s;
-    assert_eq!(
-        s.len(),
-        3,
-        "the learning's failed fast probe, then one per slow probe: {s:?}"
-    );
-    assert!(s[0] < 200, "{s:?}");
-    // the failed fast probe doubled the slow wait to 1200 s, then 2400 s (plus the climb each
-    // time)
+    assert_eq!(s.len(), 3, "one drop per failed probe: {s:?}");
+    // the first probe 600 clean seconds at the ceiling, then 1200 s, then 2400 s (plus the climb
+    // each time)
+    assert!((600..800).contains(&s[0]), "{s:?}");
     assert!((1200..1300).contains(&(s[1] - s[0])), "{s:?}");
     assert!((2400..2500).contains(&(s[2] - s[1])), "{s:?}");
     assert_eq!(o.bpp_at_end, 8);
