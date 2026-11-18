@@ -21,7 +21,8 @@ extern "C" {
 #endif
 
 /* Bumped on any change of a struct or a signature below. */
-#define CBJXS_ABI_VERSION 4u /* 3: cbjxs_stats.link_mbps + fec_repaired; 4: cbjxs_set_late_ms (issue 1387) */
+#define CBJXS_ABI_VERSION 5u /* 3: cbjxs_stats.link_mbps + fec_repaired; 4: cbjxs_set_late_ms (issue 1387);
+                              * 5: cbjxs_stats.decoder_opens (was reserved2, vstack #20) */
 
 /* cbjxs_frame.chroma (ABI 2, issue 1387 slice 3: the strih program reaches the stream as 4:2:0).
  * The same numbers as the sender's CBJXS_SEND_I420 / _I422 / _I444. */
