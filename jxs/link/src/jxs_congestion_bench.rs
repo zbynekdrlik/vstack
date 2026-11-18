@@ -124,6 +124,9 @@ struct Outcome {
     /// Frames with any lost datagram while the download ran (60..120 s) and after 70 s.
     lossy_frames_download: u32,
     lossy_frames_after_70s: u32,
+    /// Lossy frames after 120 s, and the seconds they fall in (vstack #17: a weak receiver NIC).
+    lossy_frames_after_120s: u32,
+    lossy_seconds_after_120s: Vec<u32>,
     lossy_frames: u32,
     /// The largest share of one frame's datagrams lost.
     worst_frame_loss: f64,
@@ -306,6 +309,13 @@ fn run(sc: Scenario) -> Outcome {
             out.lossy_frames += 1;
             if t_s >= 70.0 {
                 out.lossy_frames_after_70s += 1;
+            }
+            if t_s >= 120.0 {
+                out.lossy_frames_after_120s += 1;
+                let sec = t_s as u32;
+                if out.lossy_seconds_after_120s.last() != Some(&sec) {
+                    out.lossy_seconds_after_120s.push(sec);
+                }
             }
         }
         out.worst_frame_loss = out.worst_frame_loss.max(lost as f64 / sent as f64);
@@ -646,4 +656,46 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
     );
     assert_eq!(o.bpp_at_end, 8);
     assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+}
+
+/// vstack #17 (camera-box#1534, live 18.11.2026 on stream-snv): strih's 10 GbE output into a
+/// stream box whose USB 2.5 GbE NIC (RTL8156B, r8152) reports 2500 Mb/s but drains frame bursts
+/// slower than that, with a small RX ring. The receiver-link pace (90 % = 2250 Mb/s) overflows it.
+/// The congestion control cuts the pace, and the path is clean again. It must then HOLD under the
+/// level that overflowed. Climbing straight back to 2250 overflowed the NIC every minute or so,
+/// and each time the overflow also cost the box's Dante audio.
+#[test]
+fn a_receiver_nic_slower_than_its_link_is_learnt_once_and_held_under() {
+    let o = run(Scenario {
+        sender_link_mbps: 10_000.0,
+        port_mbps: 2_000.0,
+        port_buffer_bytes: 150_000.0,
+        rx_link_mbps: 2500,
+        cross: quiet,
+        // the encoder's slices leave in bursts faster than any pace here: the pace sets the
+        // burst rate on the wire
+        encode_us: 4_000.0,
+        end_s: 500.0,
+        ..STRIH_TO_STREAM
+    });
+    eprintln!("{o:?}");
+    assert!(
+        o.lossy_frames > 0,
+        "the 2250 Mb/s pace really overflows the NIC"
+    );
+    assert!(
+        o.lossy_seconds_after_120s.is_empty(),
+        "learnt within two minutes, then no overflow: lossy seconds after 120 s {:?}",
+        o.lossy_seconds_after_120s
+    );
+    assert_eq!(
+        o.pace_changes_after_200s, 0,
+        "the learnt pace holds, no sawtooth"
+    );
+    let (mbps, source) = o.pace_at_end;
+    assert_eq!(source, Some(PaceSource::Congestion));
+    assert!(
+        (1700..2000).contains(&mbps),
+        "held under the NIC's 2000 Mb/s, not far under it: {mbps}"
+    );
 }
