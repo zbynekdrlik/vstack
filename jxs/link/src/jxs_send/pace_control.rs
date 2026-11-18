@@ -641,7 +641,7 @@ mod tests {
                 t,
             );
         };
-        // the full pace loses in two episodes, 60 s apart: the ceiling one step under it
+        // two overuses at the full pace, 60 s apart: the ceiling one step under it
         send(&mut p, 2500, 3, 0.0);
         for k in 1..60 {
             send(&mut p, 2500, 0, k as f64);
