@@ -287,15 +287,21 @@ mod decode {
     /// measured 0.15 ms after the last slice; a frame the library still waits on never ends).
     pub const FINISH_TIMEOUT: Duration = Duration::from_millis(200);
 
+    /// Decoders kept for picture headers seen before (vstack #20): the auto bpp swaps between
+    /// neighbouring levels, so a handful covers every swap after the first visit.
+    pub const DECODER_CACHE: usize = 4;
+
     /// The receiver's [`SliceSink`]: decodes packet by packet, conceals lost packets from the
-    /// previous frame, and reports every frame to `on_frame` (`None` planes = not decoded).
+    /// previous frame, and reports every frame to `on_frame` (`None` planes = not decoded; the
+    /// flag = the frame came through a decoder open from the whole frame, so it is late by the
+    /// receiver's own init, not by the path: vstack #21).
     ///
     /// A frame FAILS (and the decoder is reopened from the next whole frame) when the library
     /// refuses a packet, lets a frame out before its last packet (its answer to a corrupt slice,
     /// which must never be fed further: every further packet would queue another failed frame
     /// until its pools run dry and `send_packet` blocks for good), or still wants more after the
     /// last packet. No path ever waits on the library without a bound.
-    pub struct DecodeSink<F: FnMut(&FrameReport, Option<&YuvPlanes>)> {
+    pub struct DecodeSink<F: FnMut(&FrameReport, Option<&YuvPlanes>, bool)> {
         dec: Option<Decoder>,
         /// The last good bytes of every packet index (the concealment source), reused.
         prev: Vec<Vec<u8>>,
@@ -310,6 +316,11 @@ mod decode {
         /// forgets the concealment source and reopens an open decoder from that frame (issue
         /// 1387).
         last_header: Vec<u8>,
+        /// The decoders of other picture headers seen before, oldest first (vstack #20): a swap
+        /// back to one of them decodes at once, with no open from a whole frame.
+        cache: Vec<(Vec<u8>, Decoder)>,
+        /// This frame is decoded through an open from the whole frame.
+        opened: bool,
         frame_failed: bool,
         on_frame: F,
         /// Frames that could not be decoded.
@@ -322,7 +333,7 @@ mod decode {
         pub opens: u64,
     }
 
-    impl<F: FnMut(&FrameReport, Option<&YuvPlanes>)> DecodeSink<F> {
+    impl<F: FnMut(&FrameReport, Option<&YuvPlanes>, bool)> DecodeSink<F> {
         pub fn new(on_frame: F) -> Self {
             Self {
                 dec: None,
@@ -333,6 +344,8 @@ mod decode {
                 whole: Vec::new(),
                 count: 0,
                 last_header: Vec::new(),
+                cache: Vec::new(),
+                opened: false,
                 frame_failed: false,
                 on_frame,
                 errors: 0,
@@ -381,13 +394,13 @@ mod decode {
         fn give_up(&mut self, report: &FrameReport) {
             self.errors += 1;
             self.dec = None;
-            (self.on_frame)(report, None);
+            (self.on_frame)(report, None, self.opened);
         }
 
         fn open_from_pending(&mut self, report: &FrameReport) {
             if !self.pending_ok {
                 self.errors += 1;
-                (self.on_frame)(report, None);
+                (self.on_frame)(report, None, self.opened);
                 return;
             }
             self.whole.clear();
@@ -398,11 +411,12 @@ mod decode {
                 Ok(d) => {
                     self.dec = Some(d);
                     self.opens += 1;
+                    self.opened = true;
                 }
                 Err(e) => {
                     self.last_error = Some(e.to_string());
                     self.errors += 1;
-                    (self.on_frame)(report, None);
+                    (self.on_frame)(report, None, self.opened);
                     return;
                 }
             }
@@ -425,7 +439,7 @@ mod decode {
             }
             let dec = self.dec.as_mut().expect("open");
             match dec.finish_frame(FINISH_TIMEOUT) {
-                Ok(planes) => (self.on_frame)(report, Some(planes)),
+                Ok(planes) => (self.on_frame)(report, Some(planes), self.opened),
                 Err(e) => {
                     self.last_error = Some(e.to_string());
                     self.give_up(report);
@@ -434,15 +448,17 @@ mod decode {
         }
     }
 
-    impl<F: FnMut(&FrameReport, Option<&YuvPlanes>)> SliceSink for DecodeSink<F> {
+    impl<F: FnMut(&FrameReport, Option<&YuvPlanes>, bool)> SliceSink for DecodeSink<F> {
         fn packet(&mut self, _tc: u64, index: u8, count: u8, bytes: Option<&[u8]>) {
             let index = index as usize;
             if index == 0 {
                 self.frame_failed = false;
+                self.opened = false;
                 if count as usize != self.count {
                     // A new geometry (or the first frame): start the decoder over.
                     self.count = count as usize;
                     self.dec = None;
+                    self.cache.clear();
                     self.has_prev.iter_mut().for_each(|h| *h = false);
                 }
                 if let Some(b) = bytes {
@@ -456,8 +472,19 @@ mod decode {
                             // been given up just before), the old bpp's slices have other sizes
                             // and are never a concealment source for the new one.
                             self.header_changes += 1;
-                            self.dec = None;
                             self.has_prev.iter_mut().for_each(|h| *h = false);
+                            // vstack #20: keep the old header's decoder for a swap back, and take
+                            // this header's own if it was seen before (no open from a whole frame,
+                            // which made the swap's frame late and cost the strih's genlock)
+                            if let Some(d) = self.dec.take() {
+                                if self.cache.len() == DECODER_CACHE {
+                                    self.cache.remove(0);
+                                }
+                                self.cache.push((std::mem::take(&mut self.last_header), d));
+                            }
+                            if let Some(i) = self.cache.iter().position(|(hd, _)| hd == b) {
+                                self.dec = Some(self.cache.remove(i).1);
+                            }
                         }
                         self.last_header.clear();
                         self.last_header.extend_from_slice(b);
@@ -532,6 +559,75 @@ mod tests {
     /// each swap reopened the decoder from a whole frame and cost frames on the strih's genlock.
     /// A swap back to a bpp the receiver has already decoded must reuse its decoder: frames at
     /// 4, then 5, then 4 again open two decoders, not three, and every frame decodes.
+    /// Frames through a [`DecodeSink`]: (decoded, came through an open) per frame, and the sink's
+    /// counters. `frames` = the packets of each frame (`None` = lost).
+    fn run_sink(frames: &[Vec<Option<Vec<u8>>>]) -> (Vec<(bool, bool)>, u64, u64) {
+        use crate::jxs_link::{FrameReport, SliceSink};
+        let mut out = Vec::new();
+        let mut sink = DecodeSink::new(
+            |_: &FrameReport, p: Option<&svt_jpegxs_sys::YuvPlanes>, opened: bool| {
+                out.push((p.is_some(), opened))
+            },
+        );
+        for (k, f) in frames.iter().enumerate() {
+            let tc = 333_333 * (k as u64 + 1);
+            let n = f.len() as u8;
+            for (i, p) in f.iter().enumerate() {
+                sink.packet(tc, i as u8, n, p.as_deref());
+            }
+            sink.frame_done(&FrameReport {
+                timecode: tc,
+                camera_id: 1,
+                slice_count: n,
+                lost_slices: f.iter().filter(|p| p.is_none()).count() as u32,
+                first_arrival: 0,
+                last_arrival: 0,
+            });
+        }
+        let (errors, opens) = (sink.errors, sink.opens);
+        drop(sink);
+        (out, errors, opens)
+    }
+
+    fn encoded_frame() -> Vec<Option<Vec<u8>>> {
+        use svt_jpegxs_sys::{Encoder, EncoderSettings};
+        let mut enc = Encoder::open(EncoderSettings::issue_1387(256, 64)).expect("encoder");
+        let mut packets = Vec::new();
+        enc.encode_frame(|_, b, _| packets.push(Some(b.to_vec())))
+            .expect("encode");
+        packets
+    }
+
+    #[test]
+    fn a_first_frame_that_cannot_open_is_an_error_and_the_next_whole_one_opens() {
+        let good = encoded_frame();
+        // a lost packet with no previous frame to conceal it from: nothing to open from
+        let mut lossy = good.clone();
+        lossy[2] = None;
+        let (out, errors, opens) = run_sink(&[lossy, good.clone()]);
+        assert_eq!(out, [(false, false), (true, true)]);
+        assert_eq!((errors, opens), (1, 1));
+        // a frame the library refuses to open from
+        let garbage: Vec<Option<Vec<u8>>> = good
+            .iter()
+            .map(|p| p.as_ref().map(|b| vec![0x5a; b.len()]))
+            .collect();
+        let (out, errors, opens) = run_sink(&[garbage, good]);
+        assert_eq!(out, [(false, false), (true, true)]);
+        assert_eq!((errors, opens), (1, 1));
+    }
+
+    #[test]
+    fn a_corrupt_slice_gives_the_decoder_up_and_the_next_frame_reopens() {
+        let good = encoded_frame();
+        let mut bad = good.clone();
+        let half = bad[2].as_ref().unwrap().len() / 2;
+        bad[2].as_mut().unwrap().truncate(half);
+        let (out, errors, opens) = run_sink(&[good.clone(), bad, good]);
+        assert_eq!(out, [(true, true), (false, false), (true, true)]);
+        assert_eq!((errors, opens), (1, 2));
+    }
+
     #[test]
     fn a_swap_back_to_a_bpp_already_seen_reuses_its_decoder() {
         use crate::jxs_link::{FrameReport, SliceSink};
@@ -546,9 +642,11 @@ mod tests {
         };
         let (mut e4, mut e5) = (enc_at(4), enc_at(5));
         let mut decoded = Vec::new();
-        let mut sink = DecodeSink::new(|r: &FrameReport, p: Option<&svt_jpegxs_sys::YuvPlanes>| {
-            decoded.push((r.timecode, p.is_some()))
-        });
+        let mut sink = DecodeSink::new(
+            |r: &FrameReport, p: Option<&svt_jpegxs_sys::YuvPlanes>, opened: bool| {
+                decoded.push((r.timecode, p.is_some(), opened))
+            },
+        );
         let mut tc = 0u64;
         for bpp in [4, 4, 4, 5, 5, 5, 4, 4] {
             let enc = if bpp == 4 { &mut e4 } else { &mut e5 };
@@ -574,7 +672,14 @@ mod tests {
         assert_eq!(sink.errors, 0);
         drop(sink);
         assert_eq!(decoded.len(), 8);
-        assert!(decoded.iter().all(|(_, ok)| *ok), "{decoded:?}");
+        assert!(decoded.iter().all(|(_, ok, _)| *ok), "{decoded:?}");
+        // vstack #21: the frames that came through an open are flagged (the first 4 bpp frame and
+        // the first 5 bpp frame), the swap back to 4 is not
+        let opened: Vec<bool> = decoded.iter().map(|(_, _, o)| *o).collect();
+        assert_eq!(
+            opened,
+            [true, false, false, true, false, false, false, false]
+        );
     }
 
     #[test]
