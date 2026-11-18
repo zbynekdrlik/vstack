@@ -375,7 +375,13 @@ const STRIH_TO_STREAM: Scenario = Scenario {
 
 #[test]
 fn the_link_survives_a_saturating_download_and_climbs_back() {
-    let o = run(STRIH_TO_STREAM);
+    // vstack #17: a download that saws at the full pace twice, 33 s apart, reads like a receiver
+    // NIC that overflows there, so the pace waits one step under it until the first probe (600 s
+    // at the ceiling); the bpp is back at 8 long before. The run lasts past that probe.
+    let o = run(Scenario {
+        end_s: 800.0,
+        ..STRIH_TO_STREAM
+    });
     eprintln!("{o:?}");
     assert_eq!(o.bpp_at_60s, 8, "the quiet link climbs to 8 bpp first");
     assert!(
@@ -643,6 +649,8 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
         encode_us: 11_800.0,
         cross_burst: Some((400_000.0, 14_000.0)),
         cross_burst_wander_us: 6_000.0,
+        // vstack #17: past the first probe (the full pace waits for it after a download)
+        end_s: 800.0,
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
