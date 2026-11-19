@@ -479,17 +479,22 @@ mod decode {
                             // vstack #20: keep the old header's decoder for a swap back, and take
                             // this header's own if it was seen before (no open from a whole frame,
                             // which made the swap's frame late and cost the strih's genlock)
+                            // (a reused decoder starts with no concealment source: a loss in its
+                            // first frame gives it up and the next frame opens anew, as before)
+                            // Take first, keep second (vstack #24): keeping first into a full cache
+                            // evicted the very decoder about to be taken on a three-level walk.
+                            let reused = self
+                                .cache
+                                .iter()
+                                .position(|(hd, _)| hd == b)
+                                .map(|i| self.cache.remove(i).1);
                             if let Some(d) = self.dec.take() {
                                 if self.cache.len() == DECODER_CACHE {
                                     self.cache.remove(0);
                                 }
                                 self.cache.push((std::mem::take(&mut self.last_header), d));
                             }
-                            // (a reused decoder starts with no concealment source: a loss in its
-                            // first frame gives it up and the next frame opens anew, as before)
-                            if let Some(i) = self.cache.iter().position(|(hd, _)| hd == b) {
-                                self.dec = Some(self.cache.remove(i).1);
-                            }
+                            self.dec = reused;
                         }
                         self.last_header.clear();
                         self.last_header.extend_from_slice(b);
@@ -635,6 +640,55 @@ mod tests {
         let (out, errors, opens) = run_sink(&[good.clone(), bad, good]);
         assert_eq!(out, [(true, true), (false, false), (true, true)]);
         assert_eq!((errors, opens), (1, 2));
+    }
+
+    /// vstack #24 (camera-box#1536, strih-pp 19.11.2026): a walk over three levels (4 5 6 5 4 ..)
+    /// opened a decoder at nearly every step, because the current decoder went into the full cache
+    /// before the next one was taken out of it, evicting exactly that one. Each level opens once.
+    #[cfg(feature = "jxs")]
+    #[test]
+    fn a_walk_over_three_bpp_levels_opens_each_level_once() {
+        use crate::jxs_link::{FrameReport, SliceSink};
+        use svt_jpegxs_sys::{Encoder, EncoderSettings};
+        let mut encs: Vec<Encoder> = (4..=6)
+            .map(|bpp| {
+                Encoder::open(EncoderSettings {
+                    bpp_numerator: bpp,
+                    ..EncoderSettings::issue_1387(256, 64)
+                })
+                .expect("encoder")
+            })
+            .collect();
+        let mut ok = 0;
+        let mut sink = DecodeSink::new(
+            |_: &FrameReport, p: Option<&svt_jpegxs_sys::YuvPlanes>, _: bool| {
+                ok += p.is_some() as u32
+            },
+        );
+        let walk = [4, 5, 6, 5, 4, 5, 6, 5, 4];
+        for (k, bpp) in walk.iter().enumerate() {
+            let tc = 333_333 * (k as u64 + 1);
+            let mut packets: Vec<Vec<u8>> = Vec::new();
+            encs[bpp - 4]
+                .encode_frame(|_, b, _| packets.push(b.to_vec()))
+                .expect("encode");
+            let n = packets.len() as u8;
+            for (i, p) in packets.iter().enumerate() {
+                sink.packet(tc, i as u8, n, Some(p));
+            }
+            sink.frame_done(&FrameReport {
+                timecode: tc,
+                camera_id: 1,
+                slice_count: n,
+                lost_slices: 0,
+                first_arrival: 0,
+                last_arrival: 0,
+            });
+        }
+        assert_eq!(sink.header_changes, 8);
+        assert_eq!(sink.opens, 3, "one open per level");
+        drop(sink);
+        assert_eq!(ok, 9);
     }
 
     #[cfg(feature = "jxs")]
