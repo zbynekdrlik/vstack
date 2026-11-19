@@ -479,17 +479,22 @@ mod decode {
                             // vstack #20: keep the old header's decoder for a swap back, and take
                             // this header's own if it was seen before (no open from a whole frame,
                             // which made the swap's frame late and cost the strih's genlock)
+                            // (a reused decoder starts with no concealment source: a loss in its
+                            // first frame gives it up and the next frame opens anew, as before)
+                            // Take first, keep second (vstack #24): keeping first into a full cache
+                            // evicted the very decoder about to be taken on a three-level walk.
+                            let reused = self
+                                .cache
+                                .iter()
+                                .position(|(hd, _)| hd == b)
+                                .map(|i| self.cache.remove(i).1);
                             if let Some(d) = self.dec.take() {
                                 if self.cache.len() == DECODER_CACHE {
                                     self.cache.remove(0);
                                 }
                                 self.cache.push((std::mem::take(&mut self.last_header), d));
                             }
-                            // (a reused decoder starts with no concealment source: a loss in its
-                            // first frame gives it up and the next frame opens anew, as before)
-                            if let Some(i) = self.cache.iter().position(|(hd, _)| hd == b) {
-                                self.dec = Some(self.cache.remove(i).1);
-                            }
+                            self.dec = reused;
                         }
                         self.last_header.clear();
                         self.last_header.extend_from_slice(b);
