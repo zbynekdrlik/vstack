@@ -95,7 +95,8 @@ pub fn segments_per_send(pacing: bool) -> usize {
 /// 800 Mb/s 7 bpp alone is ~19 ms of wire). A pace too slow for the frame rate shows as
 /// `dropped_busy`, which steps the bpp down by itself; the frame spread of a slower receiver's link
 /// (vstack #23) follows the bpp and keeps 20 % of the interval as the sender's slack, so it is never
-/// too slow by itself.
+/// too slow by itself, except while the congestion factor holds it at the frame's need (~91 % of
+/// the interval, ~3 ms of slack) for as long as the path stays congested.
 pub fn codec_ms(encode_ms: f64, paced_ns: u64) -> f64 {
     (encode_ms - paced_ns as f64 / 1e6).max(0.0)
 }

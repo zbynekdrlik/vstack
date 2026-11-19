@@ -11,10 +11,9 @@
 //!    is unknown) = the FRAME SPREAD (vstack #18, #23): each frame over 80 % of its interval
 //!    ([`program_spread_mbps`], 1.25x the frame's own rate, the rest the sender's slack), never
 //!    above [`LINK_PACE_PERCENT`] of the receiver's link (1 GbE -> 900, 2.5 GbE -> 2250), the rest
-//!    of the port left to its other traffic. In practice
-//!    this is only the strih program output to a stream box, which has no low-latency requirement
-//!    (owner 18.11.2026: "Ak nieco nema poziadavku na nizku latenciu tak je to stream pc") and must
-//!    lose nothing (owner 19.11.2026: "zero loss frames/samples/no frame copies"; the production
+//!    of the port left to its other traffic. In practice this is only the strih program output to
+//!    a stream box, which has no low-latency requirement (owner 18.11.2026: "Ak nieco nema
+//!    poziadavku na nizku latenciu tak je to stream pc") and must lose nothing (owner 19.11.2026: "zero loss frames/samples/no frame copies"; the production
 //!    boxes carry no other traffic). Spreading each frame over its interval keeps its burst far
 //!    under the receiver's link: 90 % of a 2.5 GbE link overflowed a USB 2.5 GbE receiver NIC and
 //!    cost its Dante audio (camera-box#1534), and even half the interval still overran it now and
@@ -29,7 +28,7 @@
 //! 4. **Congestion** (`crate::jxs_congestion`, the receiver's delay signal): a factor under 100 %
 //!    lowers a PACED automatic pace to that share of it, but never below what one frame needs in
 //!    its interval plus a tenth ([`frame_need_mbps`]): slower than that, frames back up and drop at
-//!    the sender (the frame spread of rule 2 keeps ~12 % above it, vstack #23). A line-rate sender
+//!    the sender (the frame spread of rule 2 keeps ~14 % above it, vstack #23). A line-rate sender
 //!    (a cambox into the faster strih: the owner's "never pace a cambox") and an explicit setting
 //!    are never paced by it; there the congestion control acts through the bpp alone (review
 //!    round 1).
@@ -133,9 +132,9 @@ pub fn start_spread_mbps(frame_wire_bytes: u64, fps: u32) -> u64 {
 /// The share of the frame interval a slower receiver's frame is spread over (vstack #23, owner
 /// 19.11.2026): `PROGRAM_SPREAD_NUM / PROGRAM_SPREAD_DEN` = 4/5, i.e. 1.25x the frame's own rate.
 /// The rest is the sender's slack: a frame late by a slip of the schedule or the encoder catches up
-/// within it before the next is due (at ~91 %, the frame's need, the slack was ~3 ms and a two-frame in-flight limit
-/// turns more into `dropped_busy`), and the congestion factor keeps room above the frame's need
-/// ([`frame_need_mbps`], 1.1x) to spread it thinner.
+/// within it before the next is due (at ~91 %, the frame's need, the slack was ~3 ms and a
+/// two-frame in-flight limit turns more into `dropped_busy`), and the congestion factor keeps room
+/// above the frame's need ([`frame_need_mbps`], 1.1x) to spread it thinner.
 pub const PROGRAM_SPREAD_NUM: u64 = 4;
 pub const PROGRAM_SPREAD_DEN: u64 = 5;
 

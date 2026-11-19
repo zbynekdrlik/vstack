@@ -600,9 +600,10 @@ fn the_ndi_burst_growing_later_never_saws_the_link() {
 
 /// The program's NDI frame growing from 50 KB to 1 MB at 90 s (review of the live fix: at the old
 /// half-interval pace a 600 KB growth crossed the stretch bound and the base had to re-learn).
-/// With each frame spread over 80 % of its interval (vstack #23) the grown burst stays within the
-/// gap the spread leaves, builds no queue that reads as overuse, and nothing is lost: 8 bpp and the
-/// frame spread throughout. (The re-learn of an aged base is covered by `jxs_congestion`'s own
+/// With each frame spread over 80 % of its interval (vstack #23) the grown burst (~8 ms of the 1
+/// GbE port, more than the 6.7 ms gap) is absorbed by the port buffer and the ~28 % of the port
+/// the paced frame leaves free while it is sent: no queue that reads as overuse, nothing lost,
+/// 8 bpp and the frame spread throughout. (The re-learn of an aged base is covered by `jxs_congestion`'s own
 /// tests; a burst past the port's capacity, ~1.2 MB here, overflows it and reads as loss.)
 #[test]
 fn the_ndi_burst_growing_within_the_spread_s_gap_is_not_congestion() {
