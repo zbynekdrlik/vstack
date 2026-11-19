@@ -128,6 +128,8 @@ struct Outcome {
     /// Frames with any lost datagram while the download ran (60..120 s) and after 70 s.
     lossy_frames_download: u32,
     lossy_frames_after_70s: u32,
+    /// The time of the last frame with a lost datagram (s).
+    last_lossy_s: Option<f64>,
     /// The seconds after 120 s with a lossy frame (camera-box#1534: a weak receiver NIC).
     lossy_seconds_after_120s: Vec<u32>,
     lossy_frames: u32,
@@ -310,6 +312,7 @@ fn run(sc: Scenario) -> Outcome {
         }
         if lost > 0 {
             out.lossy_frames += 1;
+            out.last_lossy_s = Some(t_s);
             if t_s >= 70.0 {
                 out.lossy_frames_after_70s += 1;
             }
@@ -385,36 +388,31 @@ fn the_link_survives_a_saturating_download_and_climbs_back() {
         o.cross_dropped_bytes > 0.0,
         "the download really saturates the port"
     );
-    let step = o
-        .first_congestion_step_s
-        .expect("the queue growth stepped the bpp down");
-    if let Some(drop) = o.first_jxs_drop_s {
-        assert!(
-            step <= drop,
-            "the first step ({step:.1} s) comes before the first lost datagram ({drop:.1} s)"
-        );
-    }
+    // vstack #23 (owner 19.11.2026: no other traffic on the production boxes, zero loss is for
+    // the program itself): a download is a resilience case, not production. With each frame
+    // spread over its interval the queue drains later, so the adaptation costs more lossy frames
+    // than the old half-interval pace (59 against 1), but it still adapts within half a minute of
+    // the onset and holds clean for the rest of the download.
+    assert!(
+        o.first_congestion_step_s.is_some(),
+        "the queue growth stepped the bpp down"
+    );
     assert!(
         o.worst_frame_loss < 0.25,
         "no frame loses its picture: worst {:.3}",
         o.worst_frame_loss
     );
     assert!(
-        o.lossy_frames_download <= 10,
-        "a handful of lossy frames while it adapted: {}",
-        o.lossy_frames_download
-    );
-    assert!(
-        o.lossy_frames_after_70s == 0,
-        "losses stop once adapted: {} lossy frames after 70 s",
-        o.lossy_frames_after_70s
+        o.last_lossy_s.is_some_and(|t| t < 95.0),
+        "adapted within 30 s of the onset, clean to the end: last loss {:?}",
+        o.last_lossy_s
     );
     assert!(o.min_bpp_download < 8, "it degraded the bpp, gracefully");
     assert_eq!(o.bpp_at_end, 8, "back to 8 bpp after the download");
     assert_eq!(
         o.pace_at_end,
-        (900, Some(PaceSource::ReceiverLink)),
-        "back to the full pace"
+        (634, Some(PaceSource::FrameSpread)),
+        "back to the full frame spread"
     );
 }
 
@@ -487,7 +485,7 @@ fn a_sender_date_step_never_reads_as_a_queue() {
     assert_eq!(o.congestion_steps, 0, "never a congestion step");
     assert_eq!(o.lossy_frames, 0);
     assert_eq!(o.bpp_at_end, 8);
-    assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
 }
 
 /// Live 30.10.2026 (strih-snv -> stream-snv, the coordinator's run of the merged branch): the
@@ -511,7 +509,7 @@ fn the_programs_ndi_burst_sharing_the_port_is_not_congestion() {
     assert_eq!(o.lossy_frames, 0);
     assert_eq!(o.bpp_at_60s, 8, "8 bpp within the first minute");
     assert_eq!(o.bpp_at_end, 8);
-    assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
     // vstack #18: the frame-spread pace follows the bpp's climb, then no change: no sawtooth
     assert_eq!(o.congestion_pace_changes_after_30s, 0, "no pace sawtooth");
 }
@@ -530,20 +528,19 @@ fn with_the_ndi_burst_a_saturating_download_still_backs_off_and_recovers() {
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
+    // vstack #23: a resilience case outside production (see the plain download bench)
     let first_step = o.first_congestion_step_s.expect("a congestion step");
-    let first_drop = o.first_jxs_drop_s.unwrap_or(f64::MAX);
     assert!(
-        (60.0..66.0).contains(&first_step) && first_step < first_drop,
-        "first step {first_step} before the first loss {first_drop}"
+        (60.0..66.0).contains(&first_step),
+        "first step {first_step}"
     );
     assert!(
-        o.lossy_frames_download <= 60,
-        "well under half of the version-1 receiver's 134: {}",
-        o.lossy_frames_download
+        o.last_lossy_s.is_some_and(|t| t < 95.0),
+        "adapted within 30 s of the onset, clean to the end: last loss {:?}",
+        o.last_lossy_s
     );
-    assert_eq!(o.lossy_frames_after_70s, 0);
     assert_eq!(o.bpp_at_end, 8, "back to 8 bpp");
-    assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
     assert_eq!(
         o.pace_changes_after_200s, 0,
         "the recovered link settles: no sawtooth from a base learnt under the cut pace"
@@ -587,7 +584,7 @@ fn the_ndi_burst_growing_later_never_saws_the_link() {
     assert!(o.congestion_steps <= 1, "{}", o.congestion_steps);
     assert_eq!(o.lossy_frames, 0);
     assert_eq!(o.bpp_at_end, 8);
-    assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
     assert_eq!(o.pace_changes_after_200s, 0, "settled");
 }
 
@@ -607,10 +604,12 @@ fn the_ndi_burst_growing_past_the_bound_relearns_and_settles() {
         ..STRIH_TO_STREAM
     });
     eprintln!("{o:?}");
-    assert!(o.first_congestion_step_s.is_some(), "the growth is seen");
-    assert!(o.congestion_steps <= 3, "{}", o.congestion_steps);
+    // vstack #23: with each frame spread over its interval the grown burst no longer builds a
+    // queue at the port at all: nothing to detect, nothing lost, 8 bpp throughout
+    assert_eq!(o.congestion_steps, 0, "{}", o.congestion_steps);
+    assert_eq!(o.lossy_frames, 0);
     assert_eq!(o.bpp_at_end, 8);
-    assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
     assert_eq!(o.pace_changes_after_300s, 0, "settled");
 }
 
@@ -636,7 +635,7 @@ fn an_ndi_burst_landing_at_a_varying_point_is_not_congestion() {
     assert_eq!(o.lossy_frames, 0);
     assert_eq!(o.bpp_at_60s, 8, "8 bpp within the first minute");
     assert_eq!(o.bpp_at_end, 8);
-    assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
     // vstack #18: the frame-spread pace follows the bpp's climb, then no change: no sawtooth
     assert_eq!(o.congestion_pace_changes_after_30s, 0, "no pace sawtooth");
 }
@@ -655,13 +654,14 @@ fn with_a_varying_ndi_burst_a_saturating_download_still_backs_off_and_recovers()
     let first = o.first_congestion_step_s.expect("the download is seen");
     assert!((60.0..66.0).contains(&first), "first step at {first}");
     assert!(o.min_bpp_download < 8, "it steps down during the download");
+    // vstack #23: a resilience case outside production (see the plain download bench)
     assert!(
-        o.lossy_frames_after_70s == 0,
-        "{}",
-        o.lossy_frames_after_70s
+        o.last_lossy_s.is_some_and(|t| t < 95.0),
+        "adapted within 30 s of the onset, clean to the end: last loss {:?}",
+        o.last_lossy_s
     );
     assert_eq!(o.bpp_at_end, 8);
-    assert_eq!(o.pace_at_end, (900, Some(PaceSource::ReceiverLink)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
 }
 
 /// camera-box#1534 (live 18.11.2026 on stream-snv): strih's 10 GbE output into a stream box whose
@@ -698,7 +698,7 @@ fn the_old_ninety_percent_of_the_link_pace_overflows_a_usb_receiver_nic() {
 }
 
 /// vstack #18 (owner 18.11.2026: the stream box has no low-latency requirement): the program
-/// output spreads each frame over half its interval (1153 Mb/s at 8 bpp), far under what the USB
+/// output spreads each frame over ~91 % of its interval (634 Mb/s at 8 bpp, vstack #23), far under what the USB
 /// NIC drains: no loss, no congestion step, 8 bpp, the pace never needs a hand-set number.
 #[test]
 fn the_frame_spread_program_output_never_overflows_a_usb_receiver_nic() {
@@ -710,6 +710,6 @@ fn the_frame_spread_program_output_never_overflows_a_usb_receiver_nic() {
     assert_eq!(o.lossy_frames, 0, "not one lossy frame in an hour");
     assert_eq!(o.congestion_steps, 0);
     assert_eq!(o.bpp_at_end, 8);
-    assert_eq!(o.pace_at_end, (1153, Some(PaceSource::FrameSpread)));
+    assert_eq!(o.pace_at_end, (634, Some(PaceSource::FrameSpread)));
     assert_eq!(o.congestion_pace_changes_after_30s, 0, "no pace sawtooth");
 }
