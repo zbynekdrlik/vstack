@@ -47,7 +47,10 @@
 //! reports before the bpp ask, the first datagram was lost a second BEFORE the first step; at
 //! 15 % and one report with a 2 s settle (FEC overhead in the model) the download cost 49 lossy
 //! frames; with a 1 s settle the step comes 2 s before the first loss and the whole download costs
-//! ONE lossy frame instead of 87 (review round 1).
+//! ONE lossy frame instead of 87 (review round 1). That was at the half-interval spread. Since
+//! vstack #23 the program spreads each frame over 80 % of its interval: the queue drains later, and
+//! the same download costs ~66 lossy frames before it adapts (~25 s, clean after). Accepted under
+//! the owner's 19.11.2026 ruling, because the production boxes carry no other traffic.
 //!
 //! - **Clean** = queuing delay under `queue_clear_us`, no stretch, no loss. After
 //!   `clean_before_increase` clean reports in a row the factor climbs back `increase_step` per

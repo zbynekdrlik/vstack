@@ -131,7 +131,7 @@ pub fn parse_fifo_prio(value: Option<&str>) -> Result<Option<i32>, String> {
 
 /// The cambox's send pacing override (issue 1387): unset / blank / `0` = AUTOMATIC, the default
 /// (`jxs_link::pace_auto`: when the receiver's link is slower than this one, each frame spread over
-/// half its interval, never over 90 % of that link (vstack #18), else line rate -- a 1 GbE cambox
+/// 80 % of its interval, never over 90 % of that link (vstack #18, #23), else line rate -- a 1 GbE cambox
 /// into the strih's 10 GbE stays at line rate); else a fixed rate
 /// in Mb/s of Ethernet wire, `jxs_link::pace::PACE_MBPS_MIN..=PACE_MBPS_MAX`.
 pub const PACE_ENV: &str = "CAMERA_BOX_JXS_PACE_MBPS";
@@ -154,7 +154,7 @@ pub fn parse_pace_mbps(value: Option<&str>) -> Result<u32, String> {
 pub fn pace_text(mbps: u32) -> String {
     if mbps == 0 {
         format!(
-            "paced automatically (each frame spread over half its interval, never over {}% of the receiver's link, when that is slower than this one, else line rate; the frame spread until its first report)",
+            "paced automatically (each frame spread over 80% of its interval, never over {}% of the receiver's link, when that is slower than this one, else line rate; half the interval until its first report)",
             crate::jxs_link::pace_auto::LINK_PACE_PERCENT
         )
     } else {
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(opts.with_pace(900).pace_mbps, 900);
         assert_eq!(opts.with_pace(900).bpp, BppMode::Fixed(4));
         assert!(
-            pace_text(0).contains("paced automatically (each frame spread over half its interval, never over 90% of the receiver's link"),
+            pace_text(0).contains("paced automatically (each frame spread over 80% of its interval, never over 90% of the receiver's link"),
             "{}",
             pace_text(0)
         );

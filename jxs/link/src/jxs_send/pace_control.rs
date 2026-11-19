@@ -2,7 +2,8 @@
 //! decision (`jxs_link::pace_auto::decide`, pure) and the one log line per change -- and the
 //! delay-based congestion control of the path (`crate::jxs_congestion`), fed the receiver's
 //! queuing delay + arrival span and this sender's own send spans: it lowers the pace factor and
-//! asks the auto bpp for a step down before the path loses anything.
+//! asks the auto bpp for a step down, as early as the delay signal shows (with the program spread
+//! over 80 % of its interval, vstack #23, a saturating cross traffic can still cost frames first).
 //!
 //! The receiver's link comes from its report (version 2, `link_mbps`); the sender's own link is
 //! re-read from sysfs once a second ([`PaceControl::refresh_own_link`]), so a port renegotiated to
@@ -345,17 +346,17 @@ mod tests {
         assert_eq!(
             p.changed(),
             Some(PaceDecision {
-                mbps: 579,
+                mbps: 362,
                 source: PaceSource::FrameSpread
             })
         );
-        // a bpp step moves the spread; 8 bpp passes the 1 GbE link's 90 %
+        // a bpp step moves the spread (vstack #23: each frame over 80 % of its interval)
         p.on_frames(1920, 1080, 8);
         assert_eq!(
             p.changed(),
             Some(PaceDecision {
-                mbps: 900,
-                source: PaceSource::ReceiverLink
+                mbps: 721,
+                source: PaceSource::FrameSpread
             })
         );
         assert_eq!(p.changed(), None);
@@ -371,7 +372,7 @@ mod tests {
         p.fill(&mut w);
         assert_eq!(
             (w.pace_mbps, w.pace_source, w.rx_link_mbps, w.own_link_mbps),
-            (1153, PaceSource::FrameSpread, 2500, 10_000)
+            (721, PaceSource::FrameSpread, 2500, 10_000)
         );
     }
 
@@ -413,8 +414,9 @@ mod tests {
         assert_eq!(p.changed().map(|d| d.mbps), Some(900));
     }
 
-    /// Issue 1387 item 2: a growing queue in the reports lowers the pace through the factor, asks
-    /// the auto bpp for a step once, and clean reports climb it back.
+    /// Issue 1387 item 2: a growing queue in the reports lowers the pace through the factor (the
+    /// frame spread down to the frame's need), asks the auto bpp for a step once, and clean reports
+    /// climb it back.
     #[test]
     fn the_receivers_queue_lowers_the_pace_and_asks_the_auto_bpp_once() {
         let mut p = PaceControl::new(0, None);
@@ -449,7 +451,8 @@ mod tests {
         p.on_report(&quiet(0), 0.5);
         assert_eq!(p.queue_delay_us, None);
         p.on_report(&quiet(1), 1.0);
-        assert_eq!(p.changed().map(|d| d.mbps), Some(900));
+        // vstack #23: the frame spread under the 1 GbE link, 8 bpp
+        assert_eq!(p.changed().map(|d| d.mbps), Some(721));
         let queued = |seq| ReceiverReport {
             delay_mean_us: Some(1_000_000 + 2_000 + 7_300),
             delay_spread_us: Some(5_000),
@@ -461,9 +464,10 @@ mod tests {
             "a delay overuse asks the auto bpp at once"
         );
         assert!(!p.take_bpp_down(), "taken");
+        // 721 x 85 % = 612, held at the frame's need, 634
         assert_eq!(
             p.changed().map(|d| (d.mbps, d.source)),
-            Some((765, pace_auto::PaceSource::Congestion))
+            Some((634, pace_auto::PaceSource::Congestion))
         );
         p.on_report(&queued(3), 2.5);
         assert!(!p.take_bpp_down(), "not again within the settle time");
@@ -478,7 +482,7 @@ mod tests {
         }
         assert_eq!(
             p.changed().map(|d| (d.mbps, d.source)),
-            Some((900, pace_auto::PaceSource::ReceiverLink))
+            Some((721, pace_auto::PaceSource::FrameSpread))
         );
         // a stretched arrival against this sender's own send span is overuse too
         p.on_report(
