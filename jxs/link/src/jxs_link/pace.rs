@@ -93,7 +93,9 @@ pub fn segments_per_send(pacing: bool) -> usize {
 /// pace held its sends back (`paced_ns`). The pace is a wire limit, not a codec cost; without this
 /// a lower pace would quietly cap the climb (the climb needs encode p99 < 60 % of 33.3 ms, and at
 /// 800 Mb/s 7 bpp alone is ~19 ms of wire). A pace too slow for the frame rate shows as
-/// `dropped_busy`, which steps the bpp down by itself.
+/// `dropped_busy`, which steps the bpp down by itself; the frame spread of a slower receiver's link
+/// (vstack #23) follows the bpp and keeps 20 % of the interval as the sender's slack, so it is never
+/// too slow by itself.
 pub fn codec_ms(encode_ms: f64, paced_ns: u64) -> f64 {
     (encode_ms - paced_ns as f64 / 1e6).max(0.0)
 }

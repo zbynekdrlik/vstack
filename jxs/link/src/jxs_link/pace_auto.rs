@@ -8,10 +8,10 @@
 //! 1. **An explicit setting wins** (`CAMERA_BOX_JXS_PACE_MBPS` / the output's `jxs_pace_mbps` /
 //!    the C ABI's `pace_mbps` above 0): the override for a path the link speeds do not describe.
 //! 2. **The receiver's link is known:** slower than the sender's own link (or the sender's own
-//!    is unknown) = the FRAME SPREAD (vstack #18, #23): each frame over ~91 % of its interval,
-//!    the frame's own rate plus a tenth ([`frame_need_mbps`], the slowest pace that still carries
-//!    every frame in its interval), never above [`LINK_PACE_PERCENT`] of the receiver's link
-//!    (1 GbE -> 900, 2.5 GbE -> 2250), the rest of the port left to its other traffic. In practice
+//!    is unknown) = the FRAME SPREAD (vstack #18, #23): each frame over 80 % of its interval
+//!    ([`program_spread_mbps`], 1.25x the frame's own rate, the rest the sender's slack), never
+//!    above [`LINK_PACE_PERCENT`] of the receiver's link (1 GbE -> 900, 2.5 GbE -> 2250), the rest
+//!    of the port left to its other traffic. In practice
 //!    this is only the strih program output to a stream box, which has no low-latency requirement
 //!    (owner 18.11.2026: "Ak nieco nema poziadavku na nizku latenciu tak je to stream pc") and must
 //!    lose nothing (owner 19.11.2026: "zero loss frames/samples/no frame copies"; the production
@@ -29,10 +29,10 @@
 //! 4. **Congestion** (`crate::jxs_congestion`, the receiver's delay signal): a factor under 100 %
 //!    lowers a PACED automatic pace to that share of it, but never below what one frame needs in
 //!    its interval plus a tenth ([`frame_need_mbps`]): slower than that, frames back up and drop at
-//!    the sender. The frame spread of rule 2 IS that need (vstack #23), so in practice only the
-//!    safe start is lowered. A line-rate sender (a cambox into the faster strih: the owner's
-//!    "never pace a cambox"), the frame spread and an explicit setting are never lowered by it;
-//!    there the congestion control acts through the bpp alone (review round 1).
+//!    the sender (the frame spread of rule 2 keeps ~12 % above it, vstack #23). A line-rate sender
+//!    (a cambox into the faster strih: the owner's "never pace a cambox") and an explicit setting
+//!    are never paced by it; there the congestion control acts through the bpp alone (review
+//!    round 1).
 //!
 //! Every paced value is clamped into the schedule's bounds (`PACE_MBPS_MIN..=PACE_MBPS_MAX`).
 
@@ -124,10 +124,27 @@ pub fn frame_wire_bytes(width: u32, height: u32, bpp: u32) -> u64 {
         + (data + parity) * (HEADER_LEN as u64 + WIRE_OVERHEAD_BYTES)
 }
 
-/// The rate that spreads `frame_wire_bytes` over 1 / [`START_SPREAD_DIVISOR`] of the interval of
+/// The safe start's rate: `frame_wire_bytes` over 1 / [`START_SPREAD_DIVISOR`] of the interval of
 /// `fps` (Mb/s, rounded up; 0 for an empty frame or no rate).
-pub fn frame_spread_mbps(frame_wire_bytes: u64, fps: u32) -> u64 {
+pub fn start_spread_mbps(frame_wire_bytes: u64, fps: u32) -> u64 {
     (frame_wire_bytes * 8 * fps as u64 * START_SPREAD_DIVISOR).div_ceil(1_000_000)
+}
+
+/// The share of the frame interval a slower receiver's frame is spread over (vstack #23, owner
+/// 19.11.2026): `PROGRAM_SPREAD_NUM / PROGRAM_SPREAD_DEN` = 4/5, i.e. 1.25x the frame's own rate.
+/// The rest is the sender's slack: a frame late by a slip of the schedule or the encoder catches up
+/// within it before the next is due (at ~91 %, the frame's need, the slack was ~3 ms and a two-frame in-flight limit
+/// turns more into `dropped_busy`), and the congestion factor keeps room above the frame's need
+/// ([`frame_need_mbps`], 1.1x) to spread it thinner.
+pub const PROGRAM_SPREAD_NUM: u64 = 4;
+pub const PROGRAM_SPREAD_DEN: u64 = 5;
+
+/// The frame spread under a slower receiver's link: `frame_wire_bytes` over
+/// [`PROGRAM_SPREAD_NUM`] / [`PROGRAM_SPREAD_DEN`] of the interval of `fps` (Mb/s, rounded up; 0 for
+/// an empty frame or no rate).
+pub fn program_spread_mbps(frame_wire_bytes: u64, fps: u32) -> u64 {
+    (frame_wire_bytes * 8 * fps as u64 * PROGRAM_SPREAD_DEN)
+        .div_ceil(1_000_000 * PROGRAM_SPREAD_NUM)
 }
 
 /// The least a pace may be for `frame_wire_bytes` every `1 / fps` s: the frame's own rate plus a
@@ -172,9 +189,8 @@ fn decide_links(i: &PaceInputs) -> PaceDecision {
             return line;
         }
         let link = rx as u64 * LINK_PACE_PERCENT / 100;
-        // vstack #23 (owner 19.11.2026): each frame over ~91 % of its interval, its own rate plus
-        // a tenth, the slowest pace that still carries every frame in its interval
-        let spread = frame_need_mbps(i.frame_wire_bytes, i.fps);
+        // vstack #23 (owner 19.11.2026): each frame over 80 % of its interval
+        let spread = program_spread_mbps(i.frame_wire_bytes, i.fps);
         if spread > 0 && spread < link {
             return PaceDecision {
                 mbps: clamp(spread),
@@ -186,7 +202,7 @@ fn decide_links(i: &PaceInputs) -> PaceDecision {
             source: PaceSource::ReceiverLink,
         };
     }
-    let spread = frame_spread_mbps(i.frame_wire_bytes, i.fps);
+    let spread = start_spread_mbps(i.frame_wire_bytes, i.fps);
     if spread == 0 || i.own_link_mbps.is_some_and(|own| spread >= own as u64) {
         return line;
     }
@@ -229,28 +245,31 @@ mod tests {
         );
         assert_eq!(frame_wire_bytes(0, 1080, 4), 0);
         // the spread rate: 1204340 bytes x 8 x 30 x 2 = 578.1 Mb/s
-        assert_eq!(frame_spread_mbps(w, 30), 579);
-        assert_eq!(frame_spread_mbps(w, 0), 0);
+        assert_eq!(start_spread_mbps(w, 30), 579);
+        assert_eq!(start_spread_mbps(w, 0), 0);
+        // the program spread: 1204340 bytes x 8 x 30 x 5 / 4 = 361.3 Mb/s
+        assert_eq!(program_spread_mbps(w, 30), 362);
+        assert_eq!(program_spread_mbps(w, 0), 0);
     }
 
     #[test]
     fn a_slower_receiver_link_spreads_each_frame_never_over_ninety_percent_of_it() {
         // vstack #18 / #23 (owner 18. and 19.11.2026: the stream box has no low-latency
-        // requirement, zero loss): a 4 bpp frame spread over ~91 % of its interval, 318 Mb/s
+        // requirement, zero loss): a 4 bpp frame spread over 80 % of its interval, 362 Mb/s
         // strih-snv 10 GbE -> stream-snv 1 GbE (SNV)
         assert_eq!(
             at(Some(10_000), Some(1000)),
-            paced(318, PaceSource::FrameSpread)
+            paced(362, PaceSource::FrameSpread)
         );
         // strih-pp 10 GbE -> a 2.5 GbE receiver (PP): never the 2250 burst that overflowed its USB
         // NIC (camera-box#1534)
         assert_eq!(
             at(Some(10_000), Some(2500)),
-            paced(318, PaceSource::FrameSpread)
+            paced(362, PaceSource::FrameSpread)
         );
         // the sender's own link unknown (Wi-Fi, a tunnel): spread anyway
-        assert_eq!(at(None, Some(1000)), paced(318, PaceSource::FrameSpread));
-        // 8 bpp: 634 Mb/s on either venue's link
+        assert_eq!(at(None, Some(1000)), paced(362, PaceSource::FrameSpread));
+        // 8 bpp: 721 Mb/s on either venue's link
         let eight = |rx| {
             decide(&PaceInputs {
                 own_link_mbps: Some(10_000),
@@ -260,13 +279,13 @@ mod tests {
                 ..PaceInputs::default()
             })
         };
-        assert_eq!(eight(1000), paced(634, PaceSource::FrameSpread));
-        assert_eq!(eight(2500), paced(634, PaceSource::FrameSpread));
-        // the spread (634) over 90 % of the link (633), equal to it (634), then under it: the
+        assert_eq!(eight(1000), paced(721, PaceSource::FrameSpread));
+        assert_eq!(eight(2500), paced(721, PaceSource::FrameSpread));
+        // the spread (721) over 90 % of the link (720), equal to it (721), then under it: the
         // link's share until the spread is strictly under it
-        assert_eq!(eight(704), paced(633, PaceSource::ReceiverLink));
-        assert_eq!(eight(705), paced(634, PaceSource::ReceiverLink));
-        assert_eq!(eight(706), paced(634, PaceSource::FrameSpread));
+        assert_eq!(eight(801), paced(720, PaceSource::ReceiverLink));
+        assert_eq!(eight(802), paced(721, PaceSource::ReceiverLink));
+        assert_eq!(eight(803), paced(721, PaceSource::FrameSpread));
         // no frame known yet: the link's share
         let none = decide(&PaceInputs {
             own_link_mbps: Some(10_000),
@@ -359,8 +378,7 @@ mod tests {
     }
 
     /// Issue 1387 item 2: the congestion factor lowers the automatic pace, never under what a frame
-    /// needs. Since vstack #23 the frame spread under a slower receiver's link IS that need, so the
-    /// factor lowers only the safe start (no receiver link yet); there the bpp acts alone.
+    /// needs: the safe start, and the frame spread under a slower receiver's link (vstack #23).
     #[test]
     fn congestion_lowers_the_pace_but_never_below_the_frames_own_need() {
         // the safe start at 8 bpp: 1153 x 85 % = 980
@@ -374,10 +392,14 @@ mod tests {
             congested(Some(10_000), None, 8, 50),
             paced(634, PaceSource::Congestion)
         );
-        // the frame spread under a slower receiver's link is already the need: never lowered
+        // the frame spread under a slower receiver's link: 721 x 95 % = 684, 50 % stops at 634
+        assert_eq!(
+            congested(Some(10_000), Some(1000), 8, 95),
+            paced(684, PaceSource::Congestion)
+        );
         assert_eq!(
             congested(Some(10_000), Some(1000), 8, 50),
-            paced(634, PaceSource::FrameSpread)
+            paced(634, PaceSource::Congestion)
         );
         // a 1 GbE cambox at line rate to the 10 GbE strih: never paced (the bpp acts alone)
         assert_eq!(

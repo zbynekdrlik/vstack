@@ -2,7 +2,8 @@
 //! decision (`jxs_link::pace_auto::decide`, pure) and the one log line per change -- and the
 //! delay-based congestion control of the path (`crate::jxs_congestion`), fed the receiver's
 //! queuing delay + arrival span and this sender's own send spans: it lowers the pace factor and
-//! asks the auto bpp for a step down before the path loses anything.
+//! asks the auto bpp for a step down, as early as the delay signal shows (with the program spread
+//! over 80 % of its interval, vstack #23, a saturating cross traffic can still cost frames first).
 //!
 //! The receiver's link comes from its report (version 2, `link_mbps`); the sender's own link is
 //! re-read from sysfs once a second ([`PaceControl::refresh_own_link`]), so a port renegotiated to
@@ -345,16 +346,16 @@ mod tests {
         assert_eq!(
             p.changed(),
             Some(PaceDecision {
-                mbps: 318,
+                mbps: 362,
                 source: PaceSource::FrameSpread
             })
         );
-        // a bpp step moves the spread (vstack #23: each frame over ~91 % of its interval)
+        // a bpp step moves the spread (vstack #23: each frame over 80 % of its interval)
         p.on_frames(1920, 1080, 8);
         assert_eq!(
             p.changed(),
             Some(PaceDecision {
-                mbps: 634,
+                mbps: 721,
                 source: PaceSource::FrameSpread
             })
         );
@@ -371,7 +372,7 @@ mod tests {
         p.fill(&mut w);
         assert_eq!(
             (w.pace_mbps, w.pace_source, w.rx_link_mbps, w.own_link_mbps),
-            (634, PaceSource::FrameSpread, 2500, 10_000)
+            (721, PaceSource::FrameSpread, 2500, 10_000)
         );
     }
 
@@ -413,11 +414,11 @@ mod tests {
         assert_eq!(p.changed().map(|d| d.mbps), Some(900));
     }
 
-    /// Issue 1387 item 2: a growing queue in the reports drops the pace factor and asks the auto bpp
-    /// for a step once, and clean reports climb the factor back. The frame spread under a slower
-    /// receiver's link is already the frame's need (vstack #23): the factor lowers nothing there.
+    /// Issue 1387 item 2: a growing queue in the reports lowers the pace through the factor (the
+    /// frame spread down to the frame's need), asks the auto bpp for a step once, and clean reports
+    /// climb it back.
     #[test]
-    fn the_receivers_queue_asks_the_auto_bpp_once_and_never_lowers_the_frame_spread() {
+    fn the_receivers_queue_lowers_the_pace_and_asks_the_auto_bpp_once() {
         let mut p = PaceControl::new(0, None);
         p.set_own_link(Some(10_000));
         p.on_frames(1920, 1080, 8);
@@ -451,7 +452,7 @@ mod tests {
         assert_eq!(p.queue_delay_us, None);
         p.on_report(&quiet(1), 1.0);
         // vstack #23: the frame spread under the 1 GbE link, 8 bpp
-        assert_eq!(p.changed().map(|d| d.mbps), Some(634));
+        assert_eq!(p.changed().map(|d| d.mbps), Some(721));
         let queued = |seq| ReceiverReport {
             delay_mean_us: Some(1_000_000 + 2_000 + 7_300),
             delay_spread_us: Some(5_000),
@@ -463,8 +464,11 @@ mod tests {
             "a delay overuse asks the auto bpp at once"
         );
         assert!(!p.take_bpp_down(), "taken");
-        // the frame spread is already the frame's need: the factor lowers nothing, the bpp acts
-        assert_eq!(p.changed(), None);
+        // 721 x 85 % = 612, held at the frame's need, 634
+        assert_eq!(
+            p.changed().map(|d| (d.mbps, d.source)),
+            Some((634, pace_auto::PaceSource::Congestion))
+        );
         p.on_report(&queued(3), 2.5);
         assert!(!p.take_bpp_down(), "not again within the settle time");
         let mut w = crate::jxs_link::SendWindow::default();
@@ -476,7 +480,10 @@ mod tests {
         for k in 4..60 {
             p.on_report(&quiet(k), k as f64);
         }
-        assert_eq!(p.changed(), None, "still the frame spread");
+        assert_eq!(
+            p.changed().map(|d| (d.mbps, d.source)),
+            Some((721, pace_auto::PaceSource::FrameSpread))
+        );
         // a stretched arrival against this sender's own send span is overuse too
         p.on_report(
             &ReceiverReport {
