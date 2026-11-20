@@ -622,10 +622,15 @@ mod tests {
         input.submit(pic).map_err(|(_, e)| e).expect("submit");
         let mut polled: Vec<(u32, Vec<u8>, bool)> = Vec::new();
         let mut waits = 0u32;
+        let mut first_was_empty = None;
         let (_, m) = output
             .recv_frame_polled(|p| match p {
-                Some((i, b, last)) => polled.push((i, b.to_vec(), last)),
+                Some((i, b, last)) => {
+                    first_was_empty.get_or_insert(false);
+                    polled.push((i, b.to_vec(), last))
+                }
                 None => {
+                    first_was_empty.get_or_insert(true);
                     waits += 1;
                     // a receive that never ends fails here instead of hanging
                     assert!(waits < 200_000, "no packet in {waits} looks");
@@ -634,7 +639,12 @@ mod tests {
             })
             .expect("polled receive");
         assert_eq!(m, n);
-        assert!(waits >= 1, "the first look comes before any packet");
+        assert!(waits >= 1);
+        assert_eq!(
+            first_was_empty,
+            Some(true),
+            "the first look comes before any packet"
+        );
         assert_eq!(
             polled.iter().map(|p| p.0).collect::<Vec<_>>(),
             (0..n).collect::<Vec<_>>()

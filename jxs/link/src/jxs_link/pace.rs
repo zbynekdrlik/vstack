@@ -107,8 +107,9 @@ pub fn codec_ms(encode_ms: f64, paced_ns: u64) -> f64 {
 /// the codec no longer reads as a slow codec; an encoder slower than the link still does, through
 /// the waits. Times are nanoseconds since the frame's submit. A sender that POLLS the encoder
 /// (vstack#27: the paced path sends and sleeps between its looks) marks each look that found no
-/// packet ([`Self::empty_poll`]); a packet is then counted as out at the last such look, so the
-/// sends and sleeps after it are not codec time.
+/// packet ([`Self::empty_poll`]); the packet came out between that look and the read, so it is
+/// counted as out halfway between them: neither the sends and sleeps after the look nor a look
+/// gap's worth of encoder time bias the codec time (the auto bpp's climb reads it).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodecClock {
     first_ns: Option<u64>,
@@ -120,7 +121,10 @@ pub struct CodecClock {
 impl CodecClock {
     /// The sender got a packet from the encoder at `now_ns`.
     pub fn enter(&mut self, now_ns: u64) {
-        let out_ns = self.last_empty_ns.take().unwrap_or(now_ns);
+        let out_ns = self
+            .last_empty_ns
+            .take()
+            .map_or(now_ns, |empty| empty + now_ns.saturating_sub(empty) / 2);
         match (self.first_ns, self.last_exit_ns) {
             (None, _) => self.first_ns = Some(out_ns),
             (Some(_), Some(exit)) => self.waited_ns += out_ns.saturating_sub(exit),
@@ -284,8 +288,8 @@ mod tests {
         );
     }
 
-    /// vstack#27: a sender that polls the encoder counts a packet as out at its last empty look;
-    /// the sends and sleeps after that look are its own, not codec time.
+    /// vstack#27: a sender that polls the encoder counts a packet as out halfway between its last
+    /// empty look and the read; the sends and sleeps after that look are not all codec time.
     #[test]
     fn a_polled_packet_counts_as_out_at_the_last_empty_look() {
         let us = 1_000u64;
@@ -305,8 +309,8 @@ mod tests {
         c.exit(1_800 * us);
         let v = c.codec_ms().unwrap();
         assert!(
-            (v - 0.96).abs() < 1e-9,
-            "0.6 ms to the first + 0.35 ms + 0.01 ms of waits: {v}"
+            (v - 1.31).abs() < 1e-9,
+            "0.75 ms to the first + 0.55 ms + 0.01 ms of waits: {v}"
         );
     }
 
