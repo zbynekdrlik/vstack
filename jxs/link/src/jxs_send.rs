@@ -1014,6 +1014,55 @@ mod tests {
         );
     }
 
+    /// vstack#27: on strih-snv the frame-spread pace held a picture until its LAST packet left
+    /// (~27 ms of wire at the 80 % spread), so a slow wire frame cost the next frame
+    /// (`dropped_busy`). A paced frame's picture goes back to the pool once its last packet is
+    /// coded, while its slices still go out on the schedule: a third frame handed over then is
+    /// taken. At a fixed 100 Mb/s an 8 bpp 1080p frame needs ~170 ms of wire; the codec is done
+    /// with it long before.
+    #[cfg(feature = "jxs")]
+    #[test]
+    fn a_paced_frame_frees_its_picture_once_coded_while_its_slices_still_go_out() {
+        let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(std::time::Duration::from_millis(20)))
+            .unwrap();
+        set_int_opt(rx.as_raw_fd(), libc::SOL_SOCKET, libc::SO_RCVBUF, 8 << 20);
+        let port = rx.local_addr().unwrap().port();
+        let (mut h, ready_rx) = JxsHandoff::unstarted();
+        let (w, ht) = (1920u32, 1080u32);
+        let frame: Vec<u8> = (0..w * ht * 2).map(|i| (i % 249) as u8).collect();
+        // both pictures taken before the threads start
+        h.offer(&jf(&frame, w, ht, tc(0), true));
+        h.offer(&jf(&frame, w, ht, tc(2), true));
+        assert_eq!(h.dropped_busy(), 0);
+        let socket = JxsSocket::connect(&format!("127.0.0.1:{port}")).unwrap();
+        let mut opts = SenderOptions::new(BppMode::Fixed(8), None);
+        opts.pace_mbps = 100;
+        assert!(h.start_threads(ready_rx, socket, 5, vec![0, 1], opts));
+        // the first frame's first slice on the wire: its pacing has started
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut b = [0u8; 2048];
+        let started = loop {
+            assert!(std::time::Instant::now() < deadline, "no packet arrived");
+            if rx.recv(&mut b).is_ok() {
+                break std::time::Instant::now();
+            }
+        };
+        // the codec is done with it well within this; ~170 ms of wire is still to go
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        h.offer(&jf(&frame, w, ht, tc(4), true));
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(150),
+            "the third frame came too late to test the hold: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            h.dropped_busy(),
+            0,
+            "the first frame's picture was still held by its pacing"
+        );
+    }
+
     /// Issue 1387, 1.11.2026 SNV event: the camboxes booted before their network, the link
     /// socket's connect failed with "Network is unreachable" and the link stayed off for good
     /// (every strih camera black on JPEG XS while NDI recovered). A target that cannot connect
