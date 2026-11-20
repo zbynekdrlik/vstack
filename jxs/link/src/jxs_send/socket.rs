@@ -227,6 +227,85 @@ impl JxsSocket {
     }
 }
 
+impl JxsSocket {
+    /// Send the queued sends that are due at `now_ns` on `pace` (vstack#27), never waiting:
+    /// called while the encoder still codes the frame, so its first slices leave as they are
+    /// coded.
+    pub fn send_due(
+        &self,
+        queue: &mut PacedQueue,
+        pace: &mut jxs_link::pace::PaceSchedule,
+        now_ns: u64,
+    ) -> SliceSent {
+        let mut out = SliceSent::default();
+        while let Some(r) = queue.front() {
+            if pace.due_ns().is_some_and(|due| due > now_ns) {
+                break;
+            }
+            pace.depart(now_ns, jxs_link::pace::wire_bytes(r.len()));
+            out.add(self.send_slice_paced(&queue.bytes[r], None));
+            queue.sends.pop_front();
+        }
+        out
+    }
+
+    /// Send every queued send on `pace`, waiting for each departure (vstack#27: after the frame's
+    /// picture went back to the pool).
+    pub fn send_queued_paced(
+        &self,
+        queue: &mut PacedQueue,
+        pace: &mut jxs_link::pace::PaceSchedule,
+    ) -> SliceSent {
+        let mut out = SliceSent::default();
+        while let Some(r) = queue.sends.pop_front() {
+            let now = monotonic_ns();
+            let at = pace.depart(now, jxs_link::pace::wire_bytes(r.len()));
+            out.paced_ns += at.saturating_sub(now);
+            sleep_until_monotonic_ns(at);
+            out.add(self.send_slice_paced(&queue.bytes[r], None));
+        }
+        out
+    }
+}
+
+/// One paced frame's sends not yet on the wire (vstack#27): the slices' datagrams and FEC
+/// parity, cut into the pace's bursts. The packet thread fills it while it reads the frame's
+/// packets, so the picture goes back to the pool once the frame is coded, not once its last
+/// packet has left on the schedule. Reused frame after frame (no allocation once grown).
+#[derive(Debug, Default)]
+pub struct PacedQueue {
+    bytes: Vec<u8>,
+    /// The bursts still to go, as ranges of `bytes`.
+    sends: std::collections::VecDeque<std::ops::Range<usize>>,
+}
+
+impl PacedQueue {
+    /// Empty it for the next frame (keeps the memory).
+    pub fn clear(&mut self) {
+        self.bytes.clear();
+        self.sends.clear();
+    }
+
+    /// Queue one buffer of whole datagrams as the pace's bursts.
+    pub fn push(&mut self, datagrams: &[u8]) {
+        let base = self.bytes.len();
+        self.bytes.extend_from_slice(datagrams);
+        let bursts =
+            jxs_link::pace::send_ranges(datagrams.len(), jxs_link::pace::segments_per_send(true));
+        self.sends
+            .extend(bursts.map(|r| base + r.start..base + r.end));
+    }
+
+    /// Sends still to go.
+    pub fn pending(&self) -> usize {
+        self.sends.len()
+    }
+
+    fn front(&self) -> Option<std::ops::Range<usize>> {
+        self.sends.front().cloned()
+    }
+}
+
 /// What [`JxsSocket::send_slice_paced`] did with one slice.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SliceSent {
@@ -237,6 +316,15 @@ pub struct SliceSent {
     /// Nanoseconds the schedule held the sends back (0 at line rate): the auto bpp leaves this
     /// out of its encode time, the wire time is not a cost of the codec.
     pub paced_ns: u64,
+}
+
+impl SliceSent {
+    /// Fold a later send in: errors and waits add up, the first send stays the first.
+    pub fn add(&mut self, later: SliceSent) {
+        self.errors += later.errors;
+        self.paced_ns += later.paced_ns;
+        self.first = self.first.or(later.first);
+    }
 }
 
 /// Set an int socket option; `true` on success.

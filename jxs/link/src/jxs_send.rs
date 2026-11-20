@@ -20,7 +20,11 @@
 //!   slice as one `send` with `UDP_SEGMENT` (UDP GSO; wire format: `crate::jxs_link`), then gives
 //!   the picture back. With a pace rate (`SenderOptions::pace_mbps`, [`PACE_ENV`] on a cambox,
 //!   default 0 = line rate) it holds each send until its departure on the pace schedule
-//!   (`crate::jxs_link::pace`): the waiting happens on this thread only.
+//!   (`crate::jxs_link::pace`): the waiting happens on this thread only. A paced frame's sends
+//!   are queued ([`PacedQueue`]) while its packets are read, only the due ones going out at
+//!   once, so its picture goes back when the frame is CODED and the rest leaves on the schedule
+//!   after (vstack#27: holding the picture over the frame-spread's ~27 ms of wire cost the next
+//!   frame on strih-snv).
 //!
 //! Every 5 s it logs the `jxs send: fps= ...` status line (its fields:
 //! `jxs_link::SendWindow::status_line`). A frame in flight with no packet for [`WEDGE_MS`] logs one
@@ -63,7 +67,8 @@ pub const UDP_SEGMENT: libc::c_int = 103;
 pub const UDP_GRO: libc::c_int = 104;
 
 /// Frames the sender holds at once (slice 1b): one whose slices are coming out, one the encoder
-/// already started. A third frame while both are busy is `dropped_busy`.
+/// already started. A third frame while both are busy is `dropped_busy`. A paced frame gives its
+/// picture back once coded, before the rest of its slices leave on the schedule (vstack#27).
 pub const FRAMES_IN_FLIGHT: usize = 2;
 /// The environment variable that names the encoder's cores explicitly (a cpulist, `0-1`); it must
 /// lie inside the off-capture cores (issue 1198 split), else it is ignored with a WARN.
@@ -133,7 +138,7 @@ struct Stats {
     convert_count: AtomicU64,
     convert_ns_sum: AtomicU64,
     convert_ns_max: AtomicU64,
-    /// Frames submitted to the encoder and not yet received back.
+    /// Frames submitted to the encoder and not yet received back (their last packet read).
     in_flight: AtomicUsize,
     in_flight_max: AtomicUsize,
     /// [`monotonic_ms`] of the packet thread's last sign of life (a loop turn or a packet).
@@ -613,7 +618,7 @@ pub use link::LinkConfig;
 
 mod socket;
 pub(crate) use socket::{get_int_opt, set_int_opt};
-pub use socket::{JxsSocket, SliceSent};
+pub use socket::{JxsSocket, PacedQueue, SliceSent};
 
 mod pace_control;
 pub use pace_control::PaceControl;
@@ -1039,28 +1044,47 @@ mod tests {
         let mut opts = SenderOptions::new(BppMode::Fixed(8), None);
         opts.pace_mbps = 100;
         assert!(h.start_threads(ready_rx, socket, 5, vec![0, 1], opts));
-        // the first frame's first slice on the wire: its pacing has started
+        // the first frame's picture comes back (its frame leaves `in_flight` with it)
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while h.stats.in_flight_max.load(Ordering::Relaxed) < 2
+            || h.stats.in_flight.load(Ordering::Relaxed) > 1
+        {
+            assert!(std::time::Instant::now() < deadline, "no picture came back");
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
+        // the pool gets it right after the count drops
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        // the first frame was still pacing then: its last slice has not arrived
+        rx.set_nonblocking(true).unwrap();
         let mut b = [0u8; 2048];
-        let started = loop {
-            assert!(std::time::Instant::now() < deadline, "no packet arrived");
-            if rx.recv(&mut b).is_ok() {
-                break std::time::Instant::now();
+        while let Ok(n) = rx.recv(&mut b) {
+            if b[0] == jxs_link::fec::FEC_MAGIC {
+                continue;
             }
-        };
-        // the codec is done with it well within this; ~170 ms of wire is still to go
-        std::thread::sleep(std::time::Duration::from_millis(60));
+            let p = jxs_link::PacketHeader::decode(&b[..n]).unwrap();
+            assert!(
+                p.slice_index + 1 < p.slice_count,
+                "the first frame's picture came back only after its last slice left"
+            );
+        }
         h.offer(&jf(&frame, w, ht, tc(4), true));
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(150),
-            "the third frame came too late to test the hold: {:?}",
-            started.elapsed()
-        );
-        assert_eq!(
-            h.dropped_busy(),
-            0,
-            "the first frame's picture was still held by its pacing"
-        );
+        assert_eq!(h.dropped_busy(), 0, "the third frame found no free picture");
+        // the paced frames are counted like any other on the status line, and still paced:
+        // ~170 ms of wire each
+        let deadline = std::time::Instant::now() + 2 * STATUS_PERIOD;
+        let win = loop {
+            assert!(std::time::Instant::now() < deadline, "no status window");
+            let (seq, win) = *h.published.lock().unwrap();
+            if seq > 0 {
+                break win;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let line = win.status_line();
+        assert!(win.frames >= 2 && win.wire_frames >= 2, "{line}");
+        assert!(win.fec_sent > 0, "{line}");
+        assert!(win.wire_ms_max > 100.0, "{line}");
+        assert_eq!(win.send_errors, 0, "{line}");
     }
 
     /// Issue 1387, 1.11.2026 SNV event: the camboxes booted before their network, the link
