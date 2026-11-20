@@ -597,11 +597,10 @@ mod tests {
     }
 
     /// vstack#27: a polled receive hands over the same packets as a blocking one, and says each
-    /// time none is out yet (right after the submit the encoder has produced nothing).
+    /// time none is out yet.
     #[test]
     fn a_polled_receive_gives_the_same_packets_and_reports_the_waits() {
-        // a 1080p picture takes the encoder milliseconds: the first look, microseconds after the
-        // submit, finds nothing
+        // a 1080p picture takes the encoder milliseconds: some looks find nothing
         let (w, h) = (1920u32, 1080u32);
         let s = EncoderSettings::issue_1387(w, h).with_slice_threads(2);
         let (input, output) = open_pipelined(s).expect("open");
@@ -622,15 +621,10 @@ mod tests {
         input.submit(pic).map_err(|(_, e)| e).expect("submit");
         let mut polled: Vec<(u32, Vec<u8>, bool)> = Vec::new();
         let mut waits = 0u32;
-        let mut first_was_empty = None;
         let (_, m) = output
             .recv_frame_polled(|p| match p {
-                Some((i, b, last)) => {
-                    first_was_empty.get_or_insert(false);
-                    polled.push((i, b.to_vec(), last))
-                }
+                Some((i, b, last)) => polled.push((i, b.to_vec(), last)),
                 None => {
-                    first_was_empty.get_or_insert(true);
                     waits += 1;
                     // a receive that never ends fails here instead of hanging
                     assert!(waits < 200_000, "no packet in {waits} looks");
@@ -639,11 +633,11 @@ mod tests {
             })
             .expect("polled receive");
         assert_eq!(m, n);
-        assert!(waits >= 1);
-        assert_eq!(
-            first_was_empty,
-            Some(true),
-            "the first look comes before any packet"
+        // the picture header can be out before the first look (main CI under coverage, 20.11.):
+        // the looks that find nothing come while the slices are coded
+        assert!(
+            waits >= 1,
+            "a 1080p picture's slices take the encoder milliseconds"
         );
         assert_eq!(
             polled.iter().map(|p| p.0).collect::<Vec<_>>(),
