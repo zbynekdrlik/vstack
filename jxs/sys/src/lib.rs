@@ -103,6 +103,12 @@ extern "C" {
         len: *mut u32,
         last: *mut u8,
     ) -> i32;
+    fn cbjxs_enc_try_packet(
+        e: *mut CEnc,
+        data: *mut *const u8,
+        len: *mut u32,
+        last: *mut u8,
+    ) -> i32;
     fn cbjxs_enc_close(e: *mut CEnc);
     fn cbjxs_dec_open(
         codestream: *const u8,

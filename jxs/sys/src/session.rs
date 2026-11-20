@@ -20,8 +20,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    cbjxs_enc_close, cbjxs_enc_get_packet, cbjxs_enc_open, cbjxs_enc_send, check, CEnc,
-    ChromaFormat, EncSettings, EncoderSettings, JxsError, YuvPlanes, GEOMETRY_ERROR,
+    cbjxs_enc_close, cbjxs_enc_get_packet, cbjxs_enc_open, cbjxs_enc_send, cbjxs_enc_try_packet,
+    check, CEnc, ChromaFormat, EncSettings, EncoderSettings, JxsError, YuvPlanes, GEOMETRY_ERROR,
 };
 
 /// The most pictures a session holds at once. `submit` calls the library's BLOCKING
@@ -272,6 +272,28 @@ impl EncoderOutput {
         &self,
         mut on_packet: impl FnMut(u32, &[u8], bool),
     ) -> Result<(Picture, u32), JxsError> {
+        self.recv(true, |p| {
+            if let Some((index, bytes, last)) = p {
+                on_packet(index, bytes, last)
+            }
+        })
+    }
+
+    /// [`Self::recv_frame`] without blocking in the library (vstack#27): `on_event(Some(packet))`
+    /// for every packet as above, `on_event(None)` each time no packet is out yet. The caller
+    /// does its own work there (a paced send) and waits as it sees fit before the next look.
+    pub fn recv_frame_polled(
+        &self,
+        on_event: impl FnMut(Option<(u32, &[u8], bool)>),
+    ) -> Result<(Picture, u32), JxsError> {
+        self.recv(false, on_event)
+    }
+
+    fn recv(
+        &self,
+        blocking: bool,
+        mut on_event: impl FnMut(Option<(u32, &[u8], bool)>),
+    ) -> Result<(Picture, u32), JxsError> {
         let raw = {
             let st = self.s.lock();
             if st.raw.is_null() {
@@ -287,12 +309,20 @@ impl EncoderOutput {
             let mut data: *const u8 = std::ptr::null();
             let mut len = 0u32;
             let mut last = 0u8;
-            // SAFETY: a valid handle (only this half closes it); the call blocks until a packet
-            // of the oldest picture is out, and one is in flight.
-            check(
-                unsafe { cbjxs_enc_get_packet(raw, &mut data, &mut len, &mut last) },
-                "get packet",
-            )?;
+            // SAFETY: a valid handle (only this half closes it); a blocking call waits until a
+            // packet of the oldest picture is out, and one is in flight.
+            let rc = unsafe {
+                if blocking {
+                    cbjxs_enc_get_packet(raw, &mut data, &mut len, &mut last)
+                } else {
+                    cbjxs_enc_try_packet(raw, &mut data, &mut len, &mut last)
+                }
+            };
+            if !blocking && rc == crate::EMPTY_QUEUE {
+                on_event(None);
+                continue;
+            }
+            check(rc, "get packet")?;
             let bytes: &[u8] = if data.is_null() || len == 0 {
                 &[]
             } else {
@@ -300,7 +330,7 @@ impl EncoderOutput {
                 // the session owns and nobody else touches), valid until its last packet.
                 unsafe { std::slice::from_raw_parts(data, len as usize) }
             };
-            on_packet(index, bytes, last != 0);
+            on_event(Some((index, bytes, last != 0)));
             index += 1;
             if last != 0 {
                 let pic = self
@@ -564,5 +594,67 @@ mod tests {
         }
         drop(tx);
         assert_eq!(reader.join().unwrap(), 40);
+    }
+
+    /// vstack#27: a polled receive hands over the same packets as a blocking one, and says each
+    /// time none is out yet (right after the submit the encoder has produced nothing).
+    #[test]
+    fn a_polled_receive_gives_the_same_packets_and_reports_the_waits() {
+        // a 1080p picture takes the encoder milliseconds: the first look, microseconds after the
+        // submit, finds nothing
+        let (w, h) = (1920u32, 1080u32);
+        let s = EncoderSettings::issue_1387(w, h).with_slice_threads(2);
+        let (input, output) = open_pipelined(s).expect("open");
+        let mut big = Picture::new(w, h);
+        {
+            let (y, u, v) = big.planes_mut().planes_mut();
+            for (i, b) in y.iter_mut().enumerate() {
+                *b = ((i * 7) % 251) as u8;
+            }
+            u.fill(90);
+            v.fill(160);
+        }
+        let mut blocking: Vec<Vec<u8>> = Vec::new();
+        input.submit(big).map_err(|(_, e)| e).expect("submit");
+        let (pic, n) = output
+            .recv_frame(|_, b, _| blocking.push(b.to_vec()))
+            .expect("receive");
+        input.submit(pic).map_err(|(_, e)| e).expect("submit");
+        let mut polled: Vec<(u32, Vec<u8>, bool)> = Vec::new();
+        let mut waits = 0u32;
+        let mut first_was_empty = None;
+        let (_, m) = output
+            .recv_frame_polled(|p| match p {
+                Some((i, b, last)) => {
+                    first_was_empty.get_or_insert(false);
+                    polled.push((i, b.to_vec(), last))
+                }
+                None => {
+                    first_was_empty.get_or_insert(true);
+                    waits += 1;
+                    // a receive that never ends fails here instead of hanging
+                    assert!(waits < 200_000, "no packet in {waits} looks");
+                    std::thread::sleep(Duration::from_micros(10));
+                }
+            })
+            .expect("polled receive");
+        assert_eq!(m, n);
+        assert!(waits >= 1);
+        assert_eq!(
+            first_was_empty,
+            Some(true),
+            "the first look comes before any packet"
+        );
+        assert_eq!(
+            polled.iter().map(|p| p.0).collect::<Vec<_>>(),
+            (0..n).collect::<Vec<_>>()
+        );
+        assert!(polled[..polled.len() - 1].iter().all(|p| !p.2));
+        assert!(polled.last().unwrap().2, "the last packet says so");
+        let bytes: Vec<Vec<u8>> = polled.into_iter().map(|p| p.1).collect();
+        assert_eq!(
+            bytes, blocking,
+            "the same picture codes to the same packets"
+        );
     }
 }
