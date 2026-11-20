@@ -615,7 +615,9 @@ fn feed(
 }
 
 /// `jxs-send`: reads each submitted frame's packets as the encoder produces them and puts
-/// every slice on the wire at once; gives the picture back after the last one; reads the
+/// every slice on the wire at once (paced: the slices due now, the rest queued); gives the
+/// picture back after the last packet read, then sends a paced frame's queued rest on the
+/// schedule (vstack#27); reads the
 /// receiver's reports and runs the auto bpp ([`BppControl`]); logs the status line every
 /// [`STATUS_PERIOD`].
 #[allow(clippy::too_many_arguments)]
@@ -715,23 +717,23 @@ fn send(
         let mut packet_errors = 0u64;
         // the frame's sends, summed (vstack#27: in the callback and after it)
         let mut frame = SliceSent::default();
-        let mut first_wall: Option<(i64, i64)> = None;
         let mut last_sent: Option<Instant> = None;
         let mut codec = jxs_link::pace::CodecClock::default();
         let since_submit = |t: Instant| t.saturating_duration_since(submitted).as_nanos() as u64;
         queue.clear();
-        // paced: a send is queued and only what is due now goes out, so this thread is back
-        // reading the encoder at once and the picture is freed when the frame is coded; the rest
-        // leaves on the schedule after (vstack#27). Line rate: everything goes out at once.
-        let mut send_now = |buf: &[u8], pace: &mut Option<jxs_link::pace::PaceSchedule>| match pace
-        {
-            Some(p) => {
-                queue.push(buf);
-                socket.send_due(&mut queue, p, monotonic_ns())
-            }
-            None => socket.send_slice_paced(buf, None),
-        };
-        let result = out.recv_frame(|index, packet, _last| {
+        // paced: the encoder is polled, never waited on, and the sends due go out between its
+        // packets, so the schedule holds while it codes; the picture is freed when the frame is
+        // coded and the rest leaves on the schedule after (vstack#27). Line rate: every slice
+        // goes out at once from a blocking read, as before.
+        let paced = pace.is_some();
+        let mut on_event = |p: Option<(u32, &[u8], bool)>| {
+            let Some((index, packet, _last)) = p else {
+                if let Some(p) = pace.as_mut() {
+                    frame.add(socket.send_due(&mut queue, p, monotonic_ns()));
+                    super::sleep_until_monotonic_ns(queue.next_look_ns(p, monotonic_ns()));
+                }
+                return;
+            };
             codec.enter(since_submit(Instant::now()));
             stats.progress_ms.store(monotonic_ms(), Ordering::Relaxed);
             if index >= count || count > 255 {
@@ -749,13 +751,10 @@ fn send(
             };
             match jxs_link::build_slice_datagrams(base, packet, &mut datagrams) {
                 Ok(_) => {
-                    frame.add(send_now(&datagrams, &mut pace));
+                    frame.add(send_now(&socket, &mut queue, &mut pace, &datagrams));
                     let groups = jxs_link::fec::build_parity(&datagrams, &mut parity);
-                    frame.add(send_now(&parity, &mut pace));
+                    frame.add(send_now(&socket, &mut queue, &mut pace, &parity));
                     window.fec_sent += groups as u64;
-                    if frame.first.is_some() {
-                        first_wall.get_or_insert_with(|| first_send_wall(wall_steps.steps_100ns()));
-                    }
                     last_sent = Some(Instant::now());
                     slices += 1;
                     bytes += packet.len() as u64;
@@ -763,7 +762,12 @@ fn send(
                 Err(_) => packet_errors += 1,
             }
             codec.exit(since_submit(Instant::now()));
-        });
+        };
+        let result = if paced {
+            out.recv_frame_polled(&mut on_event)
+        } else {
+            out.recv_frame(|index, packet, last| on_event(Some((index, packet, last))))
+        };
         // in flight from its submit to its last packet read (or its failure)
         stats.in_flight.fetch_sub(1, Ordering::Relaxed);
         match result {
@@ -776,12 +780,13 @@ fn send(
                         last_sent = Some(Instant::now());
                     }
                     frame.add(rest);
-                    if frame.first.is_some() {
-                        first_wall.get_or_insert_with(|| first_send_wall(wall_steps.steps_100ns()));
-                    }
                     stats.progress_ms.store(monotonic_ms(), Ordering::Relaxed);
                 }
                 let (first_sent, paced_ns) = (frame.first, frame.paced_ns);
+                // the first send's wall time, read back from its own instant: a paced frame's
+                // first send may come only in the queued rest (review)
+                let first_wall =
+                    first_sent.map(|t| first_send_wall(wall_steps.steps_100ns(), t.elapsed()));
                 if n == count && packet_errors == 0 {
                     let first = first_sent
                         .map(|t| t.duration_since(handed_off).as_secs_f64() * 1000.0)
@@ -834,27 +839,49 @@ fn send(
     }
 }
 
-/// A first send's wall clock minus the wall clock's steps, and the steps
+/// One slice buffer's sends: paced, queued and only the due ones sent now (vstack#27); line
+/// rate, all at once.
+fn send_now(
+    socket: &JxsSocket,
+    queue: &mut PacedQueue,
+    pace: &mut Option<jxs_link::pace::PaceSchedule>,
+    buf: &[u8],
+) -> SliceSent {
+    match pace {
+        Some(p) => {
+            queue.push(buf);
+            socket.send_due(queue, p, monotonic_ns())
+        }
+        None => socket.send_slice_paced(buf, None),
+    }
+}
+
+/// The wall clock of a send `ago` before now, minus the wall clock's steps, and the steps
 /// (`jxs_link::congestion_meter`: the pace control's delay signal).
-fn first_send_wall(steps_100ns: i64) -> (i64, i64) {
-    (crate::jxs_recv::realtime_100ns() - steps_100ns, steps_100ns)
+fn first_send_wall(steps_100ns: i64, ago: Duration) -> (i64, i64) {
+    let ago_100ns = (ago.as_nanos() / 100) as i64;
+    (
+        crate::jxs_recv::realtime_100ns() - ago_100ns - steps_100ns,
+        steps_100ns,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A wall clock stepped forward by `steps` reads the send that much earlier, so the step
-    /// never reads as delay (vstack#27 moved this into one place).
+    /// A send 30 ms ago on a wall clock stepped forward by one second reads 1.03 s before now:
+    /// the step never reads as delay, and a paced frame's first send keeps its own time
+    /// (vstack#27 review).
     #[test]
-    fn a_first_sends_wall_time_leaves_the_wall_clocks_steps_out() {
+    fn a_first_sends_wall_time_is_its_own_minus_the_wall_clocks_steps() {
         let before = crate::jxs_recv::realtime_100ns();
-        let (wall, steps) = first_send_wall(10_000_000);
+        let (wall, steps) = first_send_wall(10_000_000, Duration::from_millis(30));
         let after = crate::jxs_recv::realtime_100ns();
         assert_eq!(steps, 10_000_000);
         assert!(
-            (before - 10_000_000..=after - 10_000_000).contains(&wall),
-            "{wall} not one second before {before}..={after}"
+            (before - 10_300_000..=after - 10_300_000).contains(&wall),
+            "{wall} not 1.03 s before {before}..={after}"
         );
     }
 

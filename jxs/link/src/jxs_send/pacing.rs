@@ -295,4 +295,29 @@ mod tests {
             (5, 700, Some(t0))
         );
     }
+
+    /// A paced sender polling the encoder looks again at the next departure, never later than
+    /// the poll period, never in the past (vstack#27).
+    #[test]
+    fn the_next_look_is_the_next_departure_within_the_poll_period() {
+        use super::super::socket::PACED_POLL_NS;
+        use jxs_link::pace::PaceSchedule;
+        let mut queue = PacedQueue::default();
+        let mut pace = PaceSchedule::new(500).unwrap();
+        // nothing scheduled yet: the poll period
+        assert_eq!(queue.next_look_ns(&pace, 1_000), 1_000 + PACED_POLL_NS);
+        pace.depart(1_000, 16 * 1538);
+        let due = pace.due_ns().unwrap();
+        // a send due and nothing queued: the poll period
+        assert_eq!(
+            queue.next_look_ns(&pace, due - 10_000),
+            due - 10_000 + PACED_POLL_NS
+        );
+        queue.push(&vec![0u8; DATAGRAM_LEN]);
+        // due within the period: its departure; past: now; beyond: the period
+        assert_eq!(queue.next_look_ns(&pace, due - 10_000), due);
+        assert_eq!(queue.next_look_ns(&pace, due + 5), due + 5);
+        let early = due - PACED_POLL_NS - 1;
+        assert_eq!(queue.next_look_ns(&pace, early), early + PACED_POLL_NS);
+    }
 }

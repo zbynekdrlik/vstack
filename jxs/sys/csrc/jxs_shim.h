@@ -66,6 +66,10 @@ int32_t cbjxs_enc_send(cbjxs_enc* e, const uint8_t* y, const uint8_t* u, const u
  * buffer given to cbjxs_enc_send; it stays valid until that picture's last packet. */
 int32_t cbjxs_enc_get_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last);
 
+/* cbjxs_enc_get_packet without blocking: SvtJxsErrorNoErrorEmptyQueue when no packet is out yet
+ * (vstack#27: a paced sender keeps its schedule while the encoder codes). */
+int32_t cbjxs_enc_try_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last);
+
 void cbjxs_enc_close(cbjxs_enc* e);
 
 /* Open a packet-mode decoder from one whole frame's codestream (the library's init reads the

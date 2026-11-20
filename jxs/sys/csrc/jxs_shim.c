@@ -139,15 +139,24 @@ int32_t cbjxs_enc_send(cbjxs_enc* e, const uint8_t* y, const uint8_t* u, const u
     return (int32_t)svt_jpeg_xs_encoder_send_picture(&e->api, &in, 1);
 }
 
-int32_t cbjxs_enc_get_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last) {
+static int32_t cbjxs_enc_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last,
+                                uint8_t blocking) {
     if (!e || !data || !len || !last) return (int32_t)SvtJxsErrorBadParameter;
     svt_jpeg_xs_frame_t o;
     memset(&o, 0, sizeof(o));
-    SvtJxsErrorType_t err = svt_jpeg_xs_encoder_get_packet(&e->api, &o, 1);
+    SvtJxsErrorType_t err = svt_jpeg_xs_encoder_get_packet(&e->api, &o, blocking);
     *data = o.bitstream.buffer;
     *len = o.bitstream.used_size;
     *last = o.bitstream.last_packet_in_frame;
     return (int32_t)err;
+}
+
+int32_t cbjxs_enc_get_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last) {
+    return cbjxs_enc_packet(e, data, len, last, 1);
+}
+
+int32_t cbjxs_enc_try_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last) {
+    return cbjxs_enc_packet(e, data, len, last, 0);
 }
 
 void cbjxs_enc_close(cbjxs_enc* e) {

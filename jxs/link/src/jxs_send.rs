@@ -21,10 +21,10 @@
 //!   the picture back. With a pace rate (`SenderOptions::pace_mbps`, [`PACE_ENV`] on a cambox,
 //!   default 0 = line rate) it holds each send until its departure on the pace schedule
 //!   (`crate::jxs_link::pace`): the waiting happens on this thread only. A paced frame's sends
-//!   are queued ([`PacedQueue`]) while its packets are read, only the due ones going out at
-//!   once, so its picture goes back when the frame is CODED and the rest leaves on the schedule
-//!   after (vstack#27: holding the picture over the frame-spread's ~27 ms of wire cost the next
-//!   frame on strih-snv).
+//!   are queued ([`PacedQueue`]) while the encoder is polled for its packets, the due ones going
+//!   out between them, so its picture goes back when the frame is CODED and the rest leaves on
+//!   the schedule after (vstack#27: holding the picture over the frame-spread's ~27 ms of wire
+//!   cost the next frame on strih-snv).
 //!
 //! Every 5 s it logs the `jxs send: fps= ...` status line (its fields:
 //! `jxs_link::SendWindow::status_line`). A frame in flight with no packet for [`WEDGE_MS`] logs one

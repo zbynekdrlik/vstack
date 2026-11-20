@@ -268,6 +268,10 @@ impl JxsSocket {
     }
 }
 
+/// The longest a paced sender waits between two looks at the encoder (vstack#27): far under
+/// one burst's wire time at the spread (16 datagrams, ~270 us at 721 Mb/s).
+pub const PACED_POLL_NS: u64 = 50_000;
+
 /// One paced frame's sends not yet on the wire (vstack#27): the slices' datagrams and FEC
 /// parity, cut into the pace's bursts. The packet thread fills it while it reads the frame's
 /// packets, so the picture goes back to the pool once the frame is coded, not once its last
@@ -294,6 +298,17 @@ impl PacedQueue {
             jxs_link::pace::send_ranges(datagrams.len(), jxs_link::pace::segments_per_send(true));
         self.sends
             .extend(bursts.map(|r| base + r.start..base + r.end));
+    }
+
+    /// When a paced sender polling the encoder looks again (vstack#27): at the next send's
+    /// departure, but no later than [`PACED_POLL_NS`] from `now_ns`, so a coded packet waits at
+    /// most that long to be read.
+    pub fn next_look_ns(&self, pace: &jxs_link::pace::PaceSchedule, now_ns: u64) -> u64 {
+        let poll = now_ns + PACED_POLL_NS;
+        match pace.due_ns() {
+            Some(due) if !self.sends.is_empty() => due.clamp(now_ns, poll),
+            _ => poll,
+        }
     }
 
     /// Sends still to go.
