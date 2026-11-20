@@ -67,7 +67,9 @@ int32_t cbjxs_enc_send(cbjxs_enc* e, const uint8_t* y, const uint8_t* u, const u
 int32_t cbjxs_enc_get_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last);
 
 /* cbjxs_enc_get_packet without blocking: SvtJxsErrorNoErrorEmptyQueue when no packet is out yet
- * (vstack#27: a paced sender keeps its schedule while the encoder codes). */
+ * (vstack#27: a paced sender keeps its schedule while the encoder codes). Each empty call leaves
+ * one consumer request queued in the library's output fifo; that is safe because the fifo has
+ * exactly one consumer (EncHandle.c creates it with 1), so the requests merge into one slot. */
 int32_t cbjxs_enc_try_packet(cbjxs_enc* e, const uint8_t** data, uint32_t* len, uint8_t* last);
 
 void cbjxs_enc_close(cbjxs_enc* e);

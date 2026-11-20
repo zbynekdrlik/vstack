@@ -304,20 +304,28 @@ mod tests {
         use jxs_link::pace::PaceSchedule;
         let mut queue = PacedQueue::default();
         let mut pace = PaceSchedule::new(500).unwrap();
+        // line rate (never polled today) still waits the poll period, never spins
+        assert_eq!(queue.next_look_ns(None, 1_000), 1_000 + PACED_POLL_NS);
         // nothing scheduled yet: the poll period
-        assert_eq!(queue.next_look_ns(&pace, 1_000), 1_000 + PACED_POLL_NS);
+        assert_eq!(
+            queue.next_look_ns(Some(&pace), 1_000),
+            1_000 + PACED_POLL_NS
+        );
         pace.depart(1_000, 16 * 1538);
         let due = pace.due_ns().unwrap();
         // a send due and nothing queued: the poll period
         assert_eq!(
-            queue.next_look_ns(&pace, due - 10_000),
+            queue.next_look_ns(Some(&pace), due - 10_000),
             due - 10_000 + PACED_POLL_NS
         );
         queue.push(&vec![0u8; DATAGRAM_LEN]);
         // due within the period: its departure; past: now; beyond: the period
-        assert_eq!(queue.next_look_ns(&pace, due - 10_000), due);
-        assert_eq!(queue.next_look_ns(&pace, due + 5), due + 5);
+        assert_eq!(queue.next_look_ns(Some(&pace), due - 10_000), due);
+        assert_eq!(queue.next_look_ns(Some(&pace), due + 5), due + 5);
         let early = due - PACED_POLL_NS - 1;
-        assert_eq!(queue.next_look_ns(&pace, early), early + PACED_POLL_NS);
+        assert_eq!(
+            queue.next_look_ns(Some(&pace), early),
+            early + PACED_POLL_NS
+        );
     }
 }

@@ -105,22 +105,32 @@ pub fn codec_ms(encode_ms: f64, paced_ns: u64) -> f64 {
 /// from the submit to the first packet plus every wait for the encoder's NEXT packet. The sender's
 /// own work on a packet (its send calls, its pace sleeps) is never counted, so a link slower than
 /// the codec no longer reads as a slow codec; an encoder slower than the link still does, through
-/// the waits. Times are nanoseconds since the frame's submit.
+/// the waits. Times are nanoseconds since the frame's submit. A sender that POLLS the encoder
+/// (vstack#27: the paced path sends and sleeps between its looks) marks each look that found no
+/// packet ([`Self::empty_poll`]); a packet is then counted as out at the last such look, so the
+/// sends and sleeps after it are not codec time.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodecClock {
     first_ns: Option<u64>,
     last_exit_ns: Option<u64>,
+    last_empty_ns: Option<u64>,
     waited_ns: u64,
 }
 
 impl CodecClock {
     /// The sender got a packet from the encoder at `now_ns`.
     pub fn enter(&mut self, now_ns: u64) {
+        let out_ns = self.last_empty_ns.take().unwrap_or(now_ns);
         match (self.first_ns, self.last_exit_ns) {
-            (None, _) => self.first_ns = Some(now_ns),
-            (Some(_), Some(exit)) => self.waited_ns += now_ns.saturating_sub(exit),
+            (None, _) => self.first_ns = Some(out_ns),
+            (Some(_), Some(exit)) => self.waited_ns += out_ns.saturating_sub(exit),
             (Some(_), None) => {}
         }
+    }
+
+    /// The sender looked for the encoder's next packet at `now_ns` and found none yet.
+    pub fn empty_poll(&mut self, now_ns: u64) {
+        self.last_empty_ns = Some(now_ns);
     }
 
     /// The sender finished with that packet at `now_ns` and asks the encoder for the next one.
@@ -271,6 +281,32 @@ mod tests {
             CodecClock::default().codec_ms(),
             None,
             "no packet: nothing measured"
+        );
+    }
+
+    /// vstack#27: a sender that polls the encoder counts a packet as out at its last empty look;
+    /// the sends and sleeps after that look are its own, not codec time.
+    #[test]
+    fn a_polled_packet_counts_as_out_at_the_last_empty_look() {
+        let us = 1_000u64;
+        let mut c = CodecClock::default();
+        // empty looks at 100 and 600 us, the first packet read at 900 us
+        c.empty_poll(100 * us);
+        c.empty_poll(600 * us);
+        c.enter(900 * us);
+        c.exit(950 * us);
+        // looks at 1000 and 1300 us find nothing, the next packet read at 1700 us
+        c.empty_poll(1_000 * us);
+        c.empty_poll(1_300 * us);
+        c.enter(1_700 * us);
+        c.exit(1_750 * us);
+        // a packet already out at the next look: read at once, no wait
+        c.enter(1_760 * us);
+        c.exit(1_800 * us);
+        let v = c.codec_ms().unwrap();
+        assert!(
+            (v - 0.96).abs() < 1e-9,
+            "0.6 ms to the first + 0.35 ms + 0.01 ms of waits: {v}"
         );
     }
 

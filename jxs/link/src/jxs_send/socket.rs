@@ -303,9 +303,9 @@ impl PacedQueue {
     /// When a paced sender polling the encoder looks again (vstack#27): at the next send's
     /// departure, but no later than [`PACED_POLL_NS`] from `now_ns`, so a coded packet waits at
     /// most that long to be read.
-    pub fn next_look_ns(&self, pace: &jxs_link::pace::PaceSchedule, now_ns: u64) -> u64 {
+    pub fn next_look_ns(&self, pace: Option<&jxs_link::pace::PaceSchedule>, now_ns: u64) -> u64 {
         let poll = now_ns + PACED_POLL_NS;
-        match pace.due_ns() {
+        match pace.and_then(|p| p.due_ns()) {
             Some(due) if !self.sends.is_empty() => due.clamp(now_ns, poll),
             _ => poll,
         }

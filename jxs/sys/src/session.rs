@@ -600,12 +600,22 @@ mod tests {
     /// time none is out yet (right after the submit the encoder has produced nothing).
     #[test]
     fn a_polled_receive_gives_the_same_packets_and_reports_the_waits() {
-        let (input, output) = open_pipelined(settings()).expect("open");
+        // a 1080p picture takes the encoder milliseconds: the first look, microseconds after the
+        // submit, finds nothing
+        let (w, h) = (1920u32, 1080u32);
+        let s = EncoderSettings::issue_1387(w, h).with_slice_threads(2);
+        let (input, output) = open_pipelined(s).expect("open");
+        let mut big = Picture::new(w, h);
+        {
+            let (y, u, v) = big.planes_mut().planes_mut();
+            for (i, b) in y.iter_mut().enumerate() {
+                *b = ((i * 7) % 251) as u8;
+            }
+            u.fill(90);
+            v.fill(160);
+        }
         let mut blocking: Vec<Vec<u8>> = Vec::new();
-        input
-            .submit(picture(0))
-            .map_err(|(_, e)| e)
-            .expect("submit");
+        input.submit(big).map_err(|(_, e)| e).expect("submit");
         let (pic, n) = output
             .recv_frame(|_, b, _| blocking.push(b.to_vec()))
             .expect("receive");

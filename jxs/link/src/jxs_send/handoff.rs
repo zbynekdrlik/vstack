@@ -728,10 +728,13 @@ fn send(
         let paced = pace.is_some();
         let mut on_event = |p: Option<(u32, &[u8], bool)>| {
             let Some((index, packet, _last)) = p else {
+                // no packet out yet: the encoder's time ends here at the latest, the sends and the
+                // sleep after this look are this thread's own
+                codec.empty_poll(since_submit(Instant::now()));
                 if let Some(p) = pace.as_mut() {
                     frame.add(socket.send_due(&mut queue, p, monotonic_ns()));
-                    super::sleep_until_monotonic_ns(queue.next_look_ns(p, monotonic_ns()));
                 }
+                super::sleep_until_monotonic_ns(queue.next_look_ns(pace.as_ref(), monotonic_ns()));
                 return;
             };
             codec.enter(since_submit(Instant::now()));
