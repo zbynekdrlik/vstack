@@ -29,7 +29,8 @@ extern "C" {
      * Threads
      **************************************/
 extern Handle_t svt_jxs_create_thread(void *(*thread_function)(void *), void *thread_context);
-/* camera-box local patch (vstack#30): a thread named after its stage function (Linux only). */
+/* camera-box local patch (vstack#30): a thread named after its stage function. Every platform
+ * builds it; only Linux sets the name, elsewhere `name` is ignored. */
 extern Handle_t svt_jxs_create_named_thread(void *(*thread_function)(void *), void *thread_context, const char *name);
 #if defined(__linux__)
 /* The thread name a stage function's name maps to: "jxe-*" encoder, "jxd-*" decoder. */

@@ -3,6 +3,8 @@
 //! read as its process (`obs`) on strih-snv, and the start-up stall could not be placed.
 //!
 //! Its own test binary: one process, one test, so the counts are exactly this test's threads.
+//! Linux only: the names come from `pthread_setname_np` and are read from `/proc`.
+#![cfg(target_os = "linux")]
 
 use std::collections::BTreeMap;
 use svt_jpegxs_sys::{Decoder, Encoder, EncoderSettings};
@@ -53,6 +55,8 @@ fn every_codec_thread_names_its_codec_and_stage() {
         .expect("encode");
     let dec = Decoder::open(&packets.concat()).expect("decoder open");
     let names = thread_names();
+    // the decoder runs in packetization mode (no input stage thread, `DecHandle.c`)
+    assert_eq!(count(&names, "jxd-init"), 0, "{names:?}");
     assert!(count(&names, "jxd-work") >= 1, "{names:?}");
     assert_eq!(count(&names, "jxd-final"), 1, "{names:?}");
     assert_eq!(
