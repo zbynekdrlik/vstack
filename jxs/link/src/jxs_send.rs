@@ -814,6 +814,7 @@ mod tests {
     #[test]
     fn a_fill_is_counted_and_a_busy_dropped_even_frame_is_filled_too() {
         let (h, ready) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let frame = vec![1u8; 64 * 8 * 2];
         h.offer(&jf(&frame, 64, 8, tc(0), true));
         h.offer(&jf(&frame, 64, 8, tc(2), true));
@@ -911,6 +912,7 @@ mod tests {
     #[test]
     fn two_frames_are_taken_and_the_third_is_dropped_without_waiting() {
         let (h, ready) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let (w, ht) = (64u32, 8u32);
         let frame: Vec<u8> = (0..w * ht * 2).map(|i| (i % 251) as u8).collect();
         // the ready queue is never drained here: a waiting offer would hang the test
@@ -939,6 +941,7 @@ mod tests {
     #[test]
     fn a_returned_picture_is_reused_without_reallocating() {
         let (h, ready) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let frame = vec![1u8; 64 * 8 * 2];
         h.offer(&jf(&frame, 64, 8, tc(0), true));
         let first = ready.try_recv().unwrap();
@@ -1034,6 +1037,7 @@ mod tests {
         set_int_opt(rx.as_raw_fd(), libc::SOL_SOCKET, libc::SO_RCVBUF, 8 << 20);
         let port = rx.local_addr().unwrap().port();
         let (mut h, ready_rx) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let (w, ht) = (1920u32, 1080u32);
         let frame: Vec<u8> = (0..w * ht * 2).map(|i| (i % 249) as u8).collect();
         // both pictures taken before the threads start

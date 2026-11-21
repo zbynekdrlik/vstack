@@ -171,6 +171,16 @@ impl JxsHandoff {
         self.stats.dropped_busy.load(Ordering::Relaxed)
     }
 
+    /// Test only: take pictures out of the pool until `free` remain, and hand them to the caller
+    /// to keep alive. The tests of what happens when every picture is busy run on a pool of two,
+    /// whatever [`FRAMES_IN_FLIGHT`] is.
+    #[cfg(test)]
+    pub(super) fn hold_spare(&self, free: usize) -> Vec<Picture> {
+        (free..FRAMES_IN_FLIGHT)
+            .map(|_| self.free_rx.try_recv().expect("a free picture"))
+            .collect()
+    }
+
     /// A hand-off with its pool of pictures and no threads yet: offers fill the pictures
     /// into the returned ready queue, nobody drains it until [`Self::start_threads`].
     pub(super) fn unstarted() -> (Self, Receiver<Ready>) {
