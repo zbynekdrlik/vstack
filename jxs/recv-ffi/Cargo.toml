@@ -19,6 +19,8 @@ camera-box-jxs = { path = "../link", features = ["jxs"] }
 # archive DistroAV links; src/lib.rs pulls it in).
 jxs-send-ffi = { path = "../send-ffi" }
 svt-jpegxs-sys = { path = "../sys" }
+# vstack#30: the decoder cores option parses its cpulist with the shared helper.
+rig-core = { path = "../../rig/core" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tempfile = "3.9"

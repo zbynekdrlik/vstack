@@ -333,6 +333,9 @@ mod decode {
         /// Decoders opened from a whole frame (vstack #20: each one costs that frame's decode
         /// until the whole frame has arrived).
         pub opens: u64,
+        /// The cores a decoder's library threads run on (empty = the caller's own): a decoder
+        /// opens with the calling thread pinned there, and its threads inherit them (vstack#30).
+        pub cores: Vec<usize>,
     }
 
     impl<F: FnMut(&FrameReport, Option<&YuvPlanes>, bool)> DecodeSink<F> {
@@ -354,6 +357,7 @@ mod decode {
                 last_error: None,
                 header_changes: 0,
                 opens: 0,
+                cores: Vec::new(),
             }
         }
 
@@ -409,7 +413,8 @@ mod decode {
             for p in &self.pending[..self.count] {
                 self.whole.extend_from_slice(p);
             }
-            match Decoder::open(&self.whole) {
+            let whole = &self.whole;
+            match crate::affinity::run_on_cores(&self.cores, || Decoder::open(whole)) {
                 Ok(d) => {
                     self.dec = Some(d);
                     self.opens += 1;

@@ -24,7 +24,7 @@ use svt_jpegxs_sys::ChromaFormat;
 pub use jxs_send_ffi;
 
 /// `CBJXS_ABI_VERSION` of `include/camera_box_jxs.h`.
-pub const CBJXS_ABI_VERSION: u32 = 5;
+pub const CBJXS_ABI_VERSION: u32 = 6;
 
 /// `cbjxs_frame.chroma` (`CBJXS_CHROMA_*`; the same numbers as the sender's `CBJXS_SEND_I420` /
 /// `_I422` / `_I444`).
@@ -275,6 +275,32 @@ pub unsafe extern "C" fn cbjxs_set_late_ms(rx: *mut CbjxsReceiver, late_ms: u32)
         }
         None => -1,
     }
+}
+
+/// # Safety
+/// `rx` is NULL or a live receiver from `cbjxs_open`; `cores` is NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cbjxs_set_decoder_cores(
+    rx: *mut CbjxsReceiver,
+    cores: *const c_char,
+) -> i32 {
+    let Some(r) = rx.as_mut() else {
+        return -1;
+    };
+    let text = if cores.is_null() {
+        String::new()
+    } else {
+        std::ffi::CStr::from_ptr(cores)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let list = rig_core::affinity::parse_cpulist(text.trim());
+    if !text.trim().is_empty() && list.is_empty() {
+        r.error = Some(format!("decoder cores '{text}' is not a cpulist"));
+        return -2;
+    }
+    r.rx.set_decoder_cores(list);
+    0
 }
 
 /// # Safety

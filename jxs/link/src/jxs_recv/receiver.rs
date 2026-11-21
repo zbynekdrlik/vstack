@@ -336,6 +336,18 @@ impl JxsReceiver {
         self.cfg.late_ms = late_ms;
     }
 
+    /// The cores the decoder's library threads run on from the next decoder open (empty = the
+    /// polling thread's own). A decoder already open keeps its threads where they are (vstack#30:
+    /// on strih-snv the decoders shared every core with the program encoder at OBS start).
+    pub fn set_decoder_cores(&mut self, cores: Vec<usize>) {
+        self.sink.cores = cores;
+    }
+
+    /// The cores the next decoder open runs on (empty = the polling thread's own).
+    pub fn decoder_cores(&self) -> &[usize] {
+        &self.sink.cores
+    }
+
     /// The speed of the link the slices arrive on (Mb/s), as the last report carried it (`None` =
     /// unknown: no datagram yet, or a device with no speed and no lower device that has one).
     pub fn link_mbps(&self) -> Option<u32> {
@@ -611,6 +623,22 @@ mod tests {
         assert_eq!(late_ms_for_latency(100), 100.0);
         assert_eq!(late_ms_for_latency(101), 101.0);
         assert_eq!(late_ms_for_latency(1087), 1087.0);
+    }
+
+    /// vstack#30: the decoder cores are a receiver setting the next decoder open uses; none by
+    /// default (the polling thread's own cores).
+    #[test]
+    fn the_decoder_cores_are_kept_for_the_next_open() {
+        let mut rx = JxsReceiver::bind(ReceiverConfig::new(SocketAddr::from((
+            std::net::Ipv4Addr::LOCALHOST,
+            0,
+        ))))
+        .unwrap();
+        assert!(rx.decoder_cores().is_empty());
+        rx.set_decoder_cores(vec![3, 5]);
+        assert_eq!(rx.decoder_cores(), [3, 5]);
+        rx.set_decoder_cores(Vec::new());
+        assert!(rx.decoder_cores().is_empty());
     }
 
     fn report(tc: u64) -> FrameReport {

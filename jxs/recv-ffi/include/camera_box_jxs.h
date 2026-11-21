@@ -21,8 +21,9 @@ extern "C" {
 #endif
 
 /* Bumped on any change of a struct or a signature below. */
-#define CBJXS_ABI_VERSION 5u /* 3: cbjxs_stats.link_mbps + fec_repaired; 4: cbjxs_set_late_ms (issue 1387);
-                              * 5: cbjxs_stats.decoder_opens (was reserved2, vstack #20) */
+#define CBJXS_ABI_VERSION 6u /* 3: cbjxs_stats.link_mbps + fec_repaired; 4: cbjxs_set_late_ms (issue 1387);
+                              * 5: cbjxs_stats.decoder_opens (was reserved2, vstack #20);
+                              * 6: cbjxs_set_decoder_cores (vstack#30) */
 
 /* cbjxs_frame.chroma (ABI 2, issue 1387 slice 3: the strih program reaches the stream as 4:2:0).
  * The same numbers as the sender's CBJXS_SEND_I420 / _I422 / _I444. */
@@ -109,6 +110,12 @@ int cbjxs_set_max_bpp(cbjxs_receiver *rx, uint8_t max_bpp);
  * timecode). Like the bpp cap: the socket, the decoder and the report sequence stay.
  * 0 = done, -1 = NULL. */
 int cbjxs_set_late_ms(cbjxs_receiver *rx, uint32_t late_ms);
+
+/* The cores the decoder's library threads run on, as a cpulist ("8-11", "8,9"); NULL or "" = the
+ * thread that calls cbjxs_next_frame keeps them on its own cores. It takes effect at the next
+ * decoder open (call it right after cbjxs_open); that thread's own cores never change.
+ * 0 = done, -1 = NULL rx, -2 = not a cpulist (cbjxs_take_error names it). (ABI 6, vstack#30) */
+int cbjxs_set_decoder_cores(cbjxs_receiver *rx, const char *cores);
 
 /* The kernel's effective receive buffer of the socket in bytes (SO_RCVBUF as the kernel reports
  * it, capped by net.core.rmem_max); -1 for NULL or an unreadable value. */

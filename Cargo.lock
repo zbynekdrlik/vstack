@@ -195,6 +195,7 @@ version = "0.1.20"
 dependencies = [
  "camera-box-jxs",
  "jxs-send-ffi",
+ "rig-core",
  "svt-jpegxs-sys",
  "tempfile",
 ]
