@@ -942,11 +942,13 @@ mod tests {
 
     /// vstack#30: on strih-snv, while OBS started, one encode took 84 ms. At 30 fps that is
     /// more than two frame intervals (66.7 ms), so with two pictures the third frame found both
-    /// busy (`dropped_busy=3`). The pool must absorb one encode of up to three intervals: three
-    /// frames handed over with no picture back are all taken, and only the fourth is dropped.
+    /// busy (`dropped_busy=3`). A stalled encoder gives no picture back, so the pool alone decides
+    /// what it absorbs: three frames handed over with no picture back are all taken, and only the
+    /// fourth is dropped. The frames sent once the encoder resumes are covered by
+    /// `two_frames_handed_over_back_to_back_are_both_in_flight` and the paced test.
     #[cfg(feature = "jxs")]
     #[test]
-    fn a_stalled_encode_of_three_frame_intervals_drops_no_frame() {
+    fn three_frames_with_no_picture_back_are_all_taken() {
         let (h, ready) = JxsHandoff::unstarted();
         let frame = vec![1u8; 64 * 8 * 2];
         for k in [0, 2, 4] {

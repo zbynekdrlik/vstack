@@ -1,7 +1,7 @@
 /* camera-box issue 1387 slice 3: the C ABI of the JPEG XS SENDER (jxs/send-ffi).
  *
  * A thin C face over camera_box::jxs_send (the SAME sender the cambox runs): the picture is copied
- * into one of two reusable planar pictures, coded by SVT-JPEG-XS (latency profile, 16-line slices)
+ * into one of three reusable planar pictures, coded by SVT-JPEG-XS (latency profile, 16-line slices)
  * on two sender threads, each slice put on the wire the moment it is coded (UDP GSO, the 16-byte
  * camera-box header), and the bpp follows the receiver's once-a-second report (auto bpp). Linux
  * only. Written by hand; tests/abi.rs in this crate compiles it with the system C compiler and
