@@ -133,7 +133,7 @@ pub fn start_spread_mbps(frame_wire_bytes: u64, fps: u32) -> u64 {
 /// 19.11.2026): `PROGRAM_SPREAD_NUM / PROGRAM_SPREAD_DEN` = 4/5, i.e. 1.25x the frame's own rate.
 /// The rest is the sender's slack: a frame late by a slip of the schedule or the encoder catches up
 /// within it before the next is due (at ~91 %, the frame's need, the slack was ~3 ms and a
-/// two-frame in-flight limit turns more into `dropped_busy`), and the congestion factor keeps room
+/// in-flight limit turns more into `dropped_busy`), and the congestion factor keeps room
 /// above the frame's need ([`frame_need_mbps`], 1.1x) to spread it thinner.
 pub const PROGRAM_SPREAD_NUM: u64 = 4;
 pub const PROGRAM_SPREAD_DEN: u64 = 5;

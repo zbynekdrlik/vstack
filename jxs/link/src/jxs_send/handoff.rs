@@ -166,7 +166,7 @@ impl JxsHandoff {
         }
     }
 
-    /// Frames dropped because both pictures were in use, since the last status line.
+    /// Frames dropped because every picture was in use, since the last status line.
     pub fn dropped_busy(&self) -> u64 {
         self.stats.dropped_busy.load(Ordering::Relaxed)
     }

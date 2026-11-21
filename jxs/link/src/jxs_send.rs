@@ -8,7 +8,7 @@
 //! When set, the capture thread hands each emitted frame over through [`JxsHandoff::offer`] right
 //! after its genlock timecode is fixed and BEFORE the NDI send: it converts the YUYV frame
 //! straight into one of [`FRAMES_IN_FLIGHT`] reusable planar pictures (AVX2, no separate copy) and
-//! queues it, never waiting. With both pictures in use the frame is dropped and counted
+//! queues it, never waiting. With every picture in use the frame is dropped and counted
 //! (`dropped_busy`). The timecode is the SAME value the NDI frame carries.
 //!
 //! Two threads, pinned to the encoder's explicit core set (the off-capture cores of the #1198
@@ -66,10 +66,13 @@ const _: () = assert!(JXS_IP_TOS == JXS_DSCP as libc::c_int * 4);
 pub const UDP_SEGMENT: libc::c_int = 103;
 pub const UDP_GRO: libc::c_int = 104;
 
-/// Frames the sender holds at once (slice 1b): one whose slices are coming out, one the encoder
-/// already started. A third frame while both are busy is `dropped_busy`. A paced frame gives its
-/// picture back once coded, before the rest of its slices leave on the schedule (vstack#27).
-pub const FRAMES_IN_FLIGHT: usize = 2;
+/// Frames the sender holds at once: one whose slices are coming out, one the encoder already
+/// started, and one spare. A frame that finds every picture busy is `dropped_busy`. A paced frame
+/// gives its picture back once coded, before the rest of its slices leave on the schedule
+/// (vstack#27). The spare absorbs one encode of up to three frame intervals (100 ms at 30 fps):
+/// with two, an 84 ms encode while OBS started dropped frames on strih-snv (vstack#30). In the
+/// steady state an encode (~28 ms) is shorter than a frame interval, so the spare stays unused.
+pub const FRAMES_IN_FLIGHT: usize = 3;
 /// The environment variable that names the encoder's cores explicitly (a cpulist, `0-1`); it must
 /// lie inside the off-capture cores (issue 1198 split), else it is ignored with a WARN.
 pub const CORES_ENV: &str = "CAMERA_BOX_JXS_CORES";
