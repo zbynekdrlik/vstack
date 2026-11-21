@@ -937,6 +937,31 @@ mod tests {
         assert!(b.handed_off >= a.handed_off);
     }
 
+    /// vstack#30: on strih-snv, while OBS started, one encode took 84 ms. At 30 fps that is
+    /// more than two frame intervals (66.7 ms), so with two pictures the third frame found both
+    /// busy (`dropped_busy=3`). The pool must absorb one encode of up to three intervals: three
+    /// frames handed over with no picture back are all taken, and only the fourth is dropped.
+    #[cfg(feature = "jxs")]
+    #[test]
+    fn a_stalled_encode_of_three_frame_intervals_drops_no_frame() {
+        let (h, ready) = JxsHandoff::unstarted();
+        let frame = vec![1u8; 64 * 8 * 2];
+        for k in [0, 2, 4] {
+            h.offer(&jf(&frame, 64, 8, tc(k), true));
+        }
+        assert_eq!(
+            h.dropped_busy(),
+            0,
+            "a frame was dropped while one encode took under three frame intervals"
+        );
+        let taken: Vec<i64> = std::iter::from_fn(|| ready.try_recv().ok())
+            .map(|r| r.timecode_100ns)
+            .collect();
+        assert_eq!(taken, [tc(0), tc(2), tc(4)]);
+        h.offer(&jf(&frame, 64, 8, tc(6), true));
+        assert_eq!(h.dropped_busy(), 1, "the pool is bounded");
+    }
+
     #[cfg(feature = "jxs")]
     #[test]
     fn a_returned_picture_is_reused_without_reallocating() {
