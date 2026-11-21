@@ -113,8 +113,11 @@ int cbjxs_set_late_ms(cbjxs_receiver *rx, uint32_t late_ms);
 
 /* The cores the decoder's library threads run on, as a cpulist ("8-11", "8,9"); NULL or "" = the
  * thread that calls cbjxs_next_frame keeps them on its own cores. It takes effect at the next
- * decoder open (call it right after cbjxs_open); that thread's own cores never change.
- * 0 = done, -1 = NULL rx, -2 = not a cpulist (cbjxs_take_error names it). (ABI 6, vstack#30) */
+ * decoder open (call it right after cbjxs_open): a decoder already open, or kept for a bpp level
+ * seen before, keeps its threads where they are. That thread's own cores never change. Cores the
+ * kernel refuses (outside the process's cpuset) leave the decoder on the thread's own cores.
+ * 0 = done, -1 = NULL rx, -2 = not a cpulist of cores below 1024, the setting unchanged
+ * (cbjxs_take_error names it). (ABI 6, vstack#30) */
 int cbjxs_set_decoder_cores(cbjxs_receiver *rx, const char *cores);
 
 /* The kernel's effective receive buffer of the socket in bytes (SO_RCVBUF as the kernel reports

@@ -81,9 +81,13 @@ fn the_decoder_threads_run_on_the_cores_the_caller_names() {
     assert!(!rx.is_null());
     // the last core this process may use: a real subset whenever the runner has more than one
     let own_before = own_allowed();
-    let core = rig_core::affinity::current_thread_cores()
-        .and_then(|c| c.last().copied())
-        .expect("own cores");
+    let own = rig_core::affinity::current_thread_cores().expect("own cores");
+    // on one core the pin could not be told from no pin: such a runner proves nothing
+    assert!(
+        own.len() >= 2,
+        "needs at least 2 cores to test a pin, has {own:?}"
+    );
+    let core = *own.last().unwrap();
     let list = CString::new(core.to_string()).unwrap();
     assert_eq!(unsafe { cbjxs_set_decoder_cores(rx, list.as_ptr()) }, 0);
     // a malformed list is refused and named; the earlier setting stays
@@ -106,7 +110,8 @@ fn the_decoder_threads_run_on_the_cores_the_caller_names() {
     let mut sent = 0u64;
     let deadline = Instant::now() + Duration::from_secs(15);
     while decoded < 2 && Instant::now() < deadline {
-        if sent < 4 {
+        // a frame lost on loopback is no failure: send until two are decoded, at most 30
+        if sent < 30 {
             send_frame(&mut enc, &tx, port, base + sent * 333_333);
             sent += 1;
         }
