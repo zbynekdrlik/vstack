@@ -210,12 +210,12 @@ uint32_t svt_jxs_tw_get_waits_entered_for_testing(void) {
 typedef struct SvtJxsThreadStart {
     void *(*thread_function)(void *);
     void *thread_context;
-    const char *name; /* the stage function's name, or NULL */
 } SvtJxsThreadStart;
 
 /* camera-box local patch (vstack#30, CAMERA-BOX-VENDOR.md): every library thread carries a name
  * that tells the encoder (jxe-) from the decoder (jxd-) and its stage, so a host's thread list
- * (ps -L, top -H) shows where the codec runs; unnamed, they all read as their process. */
+ * (ps -L, top -H) shows where the codec runs; unnamed, they all read as their process. The
+ * creator names it right after pthread_create, so it carries its name once the open returns. */
 const char *svt_jxs_thread_short_name(const char *stage) {
     static const struct {
         const char *stage;
@@ -243,8 +243,6 @@ static void *svt_jxs_thread_start(void *arg) {
     SvtJxsThreadStart start = *(SvtJxsThreadStart *)arg;
     free(arg);
     svt_jxs_tw_lib_thread = 1;
-    /* a name is a label only: a failure changes nothing */
-    (void)pthread_setname_np(pthread_self(), svt_jxs_thread_short_name(start.name));
     return start.thread_function(start.thread_context);
 }
 #endif
@@ -312,7 +310,6 @@ Handle_t svt_jxs_create_named_thread(void *(*thread_function)(void *), void *thr
     }
     start->thread_function = thread_function;
     start->thread_context  = thread_context;
-    start->name            = name;
     const int create_error = pthread_create(th, &attr, svt_jxs_thread_start, start);
     if (create_error) {
         free(start);
@@ -329,6 +326,10 @@ Handle_t svt_jxs_create_named_thread(void *(*thread_function)(void *), void *thr
     }
 
     pthread_attr_destroy(&attr);
+#if defined(__linux__)
+    /* a name is a label only: a failure changes nothing */
+    (void)pthread_setname_np(*th, svt_jxs_thread_short_name(name));
+#endif
 
     /* camera-box local patch (issue 1387, CAMERA-BOX-VENDOR.md): upstream raised every worker to
      * SCHED_FIFO 99 here whenever the process ran as root. camera-box runs as root, so its encoder
