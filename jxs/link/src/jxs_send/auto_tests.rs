@@ -11,6 +11,7 @@ use std::net::UdpSocket;
 #[test]
 fn the_handoff_age_is_measured_on_the_wall_clock_at_the_hand_off() {
     let (h, _ready) = JxsHandoff::unstarted();
+    let _spare = h.hold_spare(2);
     let frame = vec![1u8; 64 * 8 * 2];
     let now = crate::jxs_recv::realtime_100ns();
     // on the 30 fps grid (emit 30), 20 ms and 40 ms old

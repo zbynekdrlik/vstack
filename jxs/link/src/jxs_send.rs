@@ -8,7 +8,7 @@
 //! When set, the capture thread hands each emitted frame over through [`JxsHandoff::offer`] right
 //! after its genlock timecode is fixed and BEFORE the NDI send: it converts the YUYV frame
 //! straight into one of [`FRAMES_IN_FLIGHT`] reusable planar pictures (AVX2, no separate copy) and
-//! queues it, never waiting. With both pictures in use the frame is dropped and counted
+//! queues it, never waiting. With every picture in use the frame is dropped and counted
 //! (`dropped_busy`). The timecode is the SAME value the NDI frame carries.
 //!
 //! Two threads, pinned to the encoder's explicit core set (the off-capture cores of the #1198
@@ -66,10 +66,13 @@ const _: () = assert!(JXS_IP_TOS == JXS_DSCP as libc::c_int * 4);
 pub const UDP_SEGMENT: libc::c_int = 103;
 pub const UDP_GRO: libc::c_int = 104;
 
-/// Frames the sender holds at once (slice 1b): one whose slices are coming out, one the encoder
-/// already started. A third frame while both are busy is `dropped_busy`. A paced frame gives its
-/// picture back once coded, before the rest of its slices leave on the schedule (vstack#27).
-pub const FRAMES_IN_FLIGHT: usize = 2;
+/// Frames the sender holds at once: one whose slices are coming out, one the encoder already
+/// started, and one spare. A frame that finds every picture busy is `dropped_busy`. A paced frame
+/// gives its picture back once coded, before the rest of its slices leave on the schedule
+/// (vstack#27). The spare absorbs one encode of up to three frame intervals (100 ms at 30 fps):
+/// with two, an 84 ms encode while OBS started dropped frames on strih-snv (vstack#30). In the
+/// steady state an encode (~28 ms) is shorter than a frame interval, so the spare stays unused.
+pub const FRAMES_IN_FLIGHT: usize = 3;
 /// The environment variable that names the encoder's cores explicitly (a cpulist, `0-1`); it must
 /// lie inside the off-capture cores (issue 1198 split), else it is ignored with a WARN.
 pub const CORES_ENV: &str = "CAMERA_BOX_JXS_CORES";
@@ -814,6 +817,7 @@ mod tests {
     #[test]
     fn a_fill_is_counted_and_a_busy_dropped_even_frame_is_filled_too() {
         let (h, ready) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let frame = vec![1u8; 64 * 8 * 2];
         h.offer(&jf(&frame, 64, 8, tc(0), true));
         h.offer(&jf(&frame, 64, 8, tc(2), true));
@@ -911,6 +915,7 @@ mod tests {
     #[test]
     fn two_frames_are_taken_and_the_third_is_dropped_without_waiting() {
         let (h, ready) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let (w, ht) = (64u32, 8u32);
         let frame: Vec<u8> = (0..w * ht * 2).map(|i| (i % 251) as u8).collect();
         // the ready queue is never drained here: a waiting offer would hang the test
@@ -935,10 +940,38 @@ mod tests {
         assert!(b.handed_off >= a.handed_off);
     }
 
+    /// vstack#30: on strih-snv, while OBS started, one encode took 84 ms. At 30 fps that is
+    /// more than two frame intervals (66.7 ms), so with two pictures the third frame found both
+    /// busy (`dropped_busy=3`). A stalled encoder gives no picture back, so the pool alone decides
+    /// what it absorbs: three frames handed over with no picture back are all taken, and only the
+    /// fourth is dropped. The frames sent once the encoder resumes are covered by
+    /// `two_frames_handed_over_back_to_back_are_both_in_flight` and the paced test.
+    #[cfg(feature = "jxs")]
+    #[test]
+    fn three_frames_with_no_picture_back_are_all_taken() {
+        let (h, ready) = JxsHandoff::unstarted();
+        let frame = vec![1u8; 64 * 8 * 2];
+        for k in [0, 2, 4] {
+            h.offer(&jf(&frame, 64, 8, tc(k), true));
+        }
+        assert_eq!(
+            h.dropped_busy(),
+            0,
+            "a frame was dropped while one encode took under three frame intervals"
+        );
+        let taken: Vec<i64> = std::iter::from_fn(|| ready.try_recv().ok())
+            .map(|r| r.timecode_100ns)
+            .collect();
+        assert_eq!(taken, [tc(0), tc(2), tc(4)]);
+        h.offer(&jf(&frame, 64, 8, tc(6), true));
+        assert_eq!(h.dropped_busy(), 1, "the pool is bounded");
+    }
+
     #[cfg(feature = "jxs")]
     #[test]
     fn a_returned_picture_is_reused_without_reallocating() {
         let (h, ready) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let frame = vec![1u8; 64 * 8 * 2];
         h.offer(&jf(&frame, 64, 8, tc(0), true));
         let first = ready.try_recv().unwrap();
@@ -1034,6 +1067,7 @@ mod tests {
         set_int_opt(rx.as_raw_fd(), libc::SOL_SOCKET, libc::SO_RCVBUF, 8 << 20);
         let port = rx.local_addr().unwrap().port();
         let (mut h, ready_rx) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let (w, ht) = (1920u32, 1080u32);
         let frame: Vec<u8> = (0..w * ht * 2).map(|i| (i % 249) as u8).collect();
         // both pictures taken before the threads start

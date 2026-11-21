@@ -166,9 +166,19 @@ impl JxsHandoff {
         }
     }
 
-    /// Frames dropped because both pictures were in use, since the last status line.
+    /// Frames dropped because every picture was in use, since the last status line.
     pub fn dropped_busy(&self) -> u64 {
         self.stats.dropped_busy.load(Ordering::Relaxed)
+    }
+
+    /// Test only: take pictures out of the pool until `free` remain, and hand them to the caller
+    /// to keep alive. The tests of what happens when every picture is busy run on a pool of two,
+    /// whatever [`FRAMES_IN_FLIGHT`] is.
+    #[cfg(test)]
+    pub(super) fn hold_spare(&self, free: usize) -> Vec<Picture> {
+        (free..FRAMES_IN_FLIGHT)
+            .map(|_| self.free_rx.try_recv().expect("a free picture"))
+            .collect()
     }
 
     /// A hand-off with its pool of pictures and no threads yet: offers fill the pictures

@@ -101,6 +101,7 @@ mod tests {
     #[test]
     fn a_raw_nv12_picture_is_copied_into_a_420_picture_and_queued() {
         let (h, ready) = JxsHandoff::unstarted();
+        let _spare = h.hold_spare(2);
         let (w, ht, stride) = (8u32, 4u32, 10usize);
         let y: Vec<u8> = (0..stride * 4).map(|i| i as u8).collect();
         let uv: Vec<u8> = (0..stride * 2).map(|i| 100 + i as u8).collect();

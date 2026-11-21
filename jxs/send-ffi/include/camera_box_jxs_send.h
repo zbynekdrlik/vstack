@@ -1,7 +1,7 @@
 /* camera-box issue 1387 slice 3: the C ABI of the JPEG XS SENDER (jxs/send-ffi).
  *
  * A thin C face over camera_box::jxs_send (the SAME sender the cambox runs): the picture is copied
- * into one of two reusable planar pictures, coded by SVT-JPEG-XS (latency profile, 16-line slices)
+ * into one of three reusable planar pictures, coded by SVT-JPEG-XS (latency profile, 16-line slices)
  * on two sender threads, each slice put on the wire the moment it is coded (UDP GSO, the 16-byte
  * camera-box header), and the bpp follows the receiver's once-a-second report (auto bpp). Linux
  * only. Written by hand; tests/abi.rs in this crate compiles it with the system C compiler and
@@ -98,7 +98,7 @@ typedef struct cbjxs_send_stats {
 	double window_s;
 	uint64_t frames; /* sent whole */
 	uint64_t bytes;  /* codestream bytes */
-	uint64_t dropped_busy; /* both pictures in use */
+	uint64_t dropped_busy; /* every picture in use */
 	uint64_t send_errors;
 	uint64_t encode_errors; /* not coded or not sent whole, a refused picture included */
 	uint64_t reports;       /* receiver reports read */
@@ -140,7 +140,7 @@ int cbjxs_send_set_log(cbjxs_send_log_fn fn);
  * (always NUL-terminated when err_len > 0). */
 cbjxs_sender *cbjxs_send_open(const cbjxs_send_config *cfg, char *err, size_t err_len);
 
-/* Hand one picture over. 1 = copied and queued; 0 = not taken (both pictures in use, counted as
+/* Hand one picture over. 1 = copied and queued; 0 = not taken (every picture in use, counted as
  * dropped_busy; or a frame off the 30 fps grid, never counted); -1 = refused (an unknown format,
  * a geometry the format cannot take, a NULL plane or a stride shorter than its row; counted as an
  * encode error, cbjxs_send_take_error names it); -2 = a NULL argument or an internal failure (a
