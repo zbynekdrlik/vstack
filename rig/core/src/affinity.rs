@@ -474,6 +474,48 @@ pub fn pin_current_thread_to(cores: &[usize]) -> bool {
     pin_current_thread(cores)
 }
 
+/// The cores the calling thread may run on (`None` when the kernel refuses the read).
+pub fn current_thread_cores() -> Option<Vec<usize>> {
+    // SAFETY: `set` is zero-initialised and filled by sched_getaffinity(0, ...) for the calling
+    // thread, for the size passed; CPU_ISSET reads it only for in-range indices.
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        if libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut set) != 0 {
+            return None;
+        }
+        Some(
+            (0..libc::CPU_SETSIZE as usize)
+                .filter(|&c| libc::CPU_ISSET(c, &set))
+                .collect(),
+        )
+    }
+}
+
+/// Run `f` with the calling thread pinned to `cores`, then give the thread its own cores back
+/// (vstack#30): a thread `f` starts inherits `cores`, the caller keeps its mask, also when `f`
+/// panics. Empty `cores` or a mask that cannot be read run `f` as it is; cores the kernel refuses
+/// (outside the process's cpuset, past `CPU_SETSIZE`) run it as it is with a WARN.
+pub fn run_on_cores<T>(cores: &[usize], f: impl FnOnce() -> T) -> T {
+    /// Gives the thread its own cores back when dropped: on return and on unwind alike.
+    struct Restore(Vec<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // the thread ran on these cores a moment ago: the kernel takes them back
+            pin_current_thread(&self.0);
+        }
+    }
+    let Some(own) = current_thread_cores().filter(|_| !cores.is_empty()) else {
+        return f();
+    };
+    let in_range = cores.iter().all(|&c| c < libc::CPU_SETSIZE as usize);
+    if !in_range || !pin_current_thread(cores) {
+        tracing::warn!("vstack#30: cores {cores:?} refused; running on the thread's own {own:?}");
+        return f();
+    }
+    let _restore = Restore(own);
+    f()
+}
+
 /// Pin the calling thread (a painter / `--display` render / intercom auxiliary
 /// thread, `label` for the log) OFF the capture core, onto the general cores.
 pub fn pin_off_capture_core(label: &str) {
@@ -1193,5 +1235,62 @@ LOC:    1000000    1000000    1000000    1000000   Local timer interrupts
             libc::SCHED_FIFO | libc::SCHED_RESET_ON_FORK,
             "pure policy word must equal libc SCHED_FIFO | SCHED_RESET_ON_FORK"
         );
+    }
+
+    /// vstack#30: a thread started inside `run_on_cores` runs on those cores, the caller gets its
+    /// own cores back, and empty cores leave everything as it is.
+    #[test]
+    fn a_thread_started_on_named_cores_keeps_them_and_the_caller_gets_its_own_back() {
+        let own = current_thread_cores().expect("own cores");
+        // the same mask as the kernel reports for this thread
+        let status = std::fs::read_to_string("/proc/thread-self/status").unwrap();
+        let listed = status
+            .lines()
+            .find_map(|l| l.strip_prefix("Cpus_allowed_list:"))
+            .unwrap();
+        assert_eq!(own, parse_cpulist(listed.trim()));
+        assert!(!own.is_empty());
+        let one = vec![*own.last().unwrap()];
+        let (inside, child) = run_on_cores(&one, || {
+            let inside = current_thread_cores();
+            let child = std::thread::spawn(current_thread_cores).join().unwrap();
+            (inside, child)
+        });
+        assert_eq!(
+            inside.as_deref(),
+            Some(&one[..]),
+            "the caller runs on them meanwhile"
+        );
+        assert_eq!(
+            child.as_deref(),
+            Some(&one[..]),
+            "a thread it starts inherits them"
+        );
+        assert_eq!(
+            current_thread_cores(),
+            Some(own.clone()),
+            "the caller's own come back"
+        );
+        let same = run_on_cores(&[], current_thread_cores);
+        assert_eq!(same, Some(own.clone()), "no cores: nothing changes");
+        assert_eq!(
+            run_on_cores(&one, || 7),
+            7,
+            "the closure's value comes back"
+        );
+        let unwound = std::panic::catch_unwind(|| run_on_cores(&one, || panic!("inside")));
+        assert!(unwound.is_err());
+        assert_eq!(
+            current_thread_cores(),
+            Some(own.clone()),
+            "restored on a panic too"
+        );
+        // a core past the kernel's set size is refused, never a panic
+        let past = libc::CPU_SETSIZE as usize;
+        assert_eq!(
+            run_on_cores(&[past], current_thread_cores),
+            Some(own.clone())
+        );
+        assert_eq!(run_on_cores(&[100_000], current_thread_cores), Some(own));
     }
 }

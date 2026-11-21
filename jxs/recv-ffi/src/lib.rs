@@ -7,7 +7,8 @@
 //! slice-wise decode, concealment and the 32-byte receiver report back to the sender all happen
 //! inside it, so there is one receiver implementation for the probe and for OBS.
 //!
-//! No panic crosses the boundary: each call runs under `catch_unwind`. A panic marks the receiver
+//! No panic crosses the boundary: each call that reaches the receiver's own code runs under
+//! `catch_unwind` (the plain setters only store a value). A panic marks the receiver
 //! unusable (`-2` from then on); the caller closes it and opens a new one.
 #![cfg(target_os = "linux")]
 
@@ -24,7 +25,7 @@ use svt_jpegxs_sys::ChromaFormat;
 pub use jxs_send_ffi;
 
 /// `CBJXS_ABI_VERSION` of `include/camera_box_jxs.h`.
-pub const CBJXS_ABI_VERSION: u32 = 5;
+pub const CBJXS_ABI_VERSION: u32 = 6;
 
 /// `cbjxs_frame.chroma` (`CBJXS_CHROMA_*`; the same numbers as the sender's `CBJXS_SEND_I420` /
 /// `_I422` / `_I444`).
@@ -278,6 +279,70 @@ pub unsafe extern "C" fn cbjxs_set_late_ms(rx: *mut CbjxsReceiver, late_ms: u32)
 }
 
 /// # Safety
+/// `rx` is NULL or a live receiver from `cbjxs_open`; `cores` is NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cbjxs_set_decoder_cores(
+    rx: *mut CbjxsReceiver,
+    cores: *const c_char,
+) -> i32 {
+    let Some(r) = rx.as_mut() else {
+        return -1;
+    };
+    let text = if cores.is_null() {
+        String::new()
+    } else {
+        std::ffi::CStr::from_ptr(cores)
+            .to_string_lossy()
+            .into_owned()
+    };
+    match strict_cpulist(text.trim()) {
+        Some(list) => {
+            r.rx.set_decoder_cores(list);
+            0
+        }
+        None => {
+            r.error = Some(format!(
+                "decoder cores '{text}' is not a cpulist of cores below {MAX_CORE}"
+            ));
+            -2
+        }
+    }
+}
+
+/// One past the highest core a cpulist may name (the kernel's `CPU_SETSIZE`).
+const MAX_CORE: usize = 1024;
+
+/// A cpulist ("8-11", "8,9,12") where every field is a core or an ascending range below
+/// [`MAX_CORE`]; `None` for anything else, so a typo is refused instead of half applied. An empty
+/// text is the empty list.
+fn strict_cpulist(text: &str) -> Option<Vec<usize>> {
+    let mut cores = Vec::new();
+    if text.is_empty() {
+        return Some(cores);
+    }
+    for field in text.split(',') {
+        let field = field.trim();
+        let (lo, hi) = match field.split_once('-') {
+            Some((a, b)) => (
+                a.trim().parse::<usize>().ok()?,
+                b.trim().parse::<usize>().ok()?,
+            ),
+            None => {
+                let c = field.parse::<usize>().ok()?;
+                (c, c)
+            }
+        };
+        if lo > hi || hi >= MAX_CORE {
+            return None;
+        }
+        cores.extend(lo..=hi);
+    }
+    cores.sort_unstable();
+    cores.dedup();
+    Some(cores)
+}
+
+/// # Safety
 /// `rx` is NULL or a live receiver from `cbjxs_open`.
 #[no_mangle]
 pub unsafe extern "C" fn cbjxs_recv_buffer_bytes(rx: *const CbjxsReceiver) -> i64 {
@@ -350,6 +415,28 @@ pub unsafe extern "C" fn cbjxs_close(rx: *mut CbjxsReceiver) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// vstack#30 review: a cpulist is taken whole or refused, never half applied, and never
+    /// names a core the kernel's set cannot hold.
+    #[test]
+    fn a_decoder_cpulist_is_taken_whole_or_refused() {
+        assert_eq!(strict_cpulist(""), Some(vec![]));
+        assert_eq!(strict_cpulist("8-11"), Some(vec![8, 9, 10, 11]));
+        assert_eq!(strict_cpulist("9, 8,8"), Some(vec![8, 9]));
+        assert_eq!(strict_cpulist("1023"), Some(vec![1023]));
+        for bad in [
+            "8,x",
+            "x",
+            "11-8",
+            "1024",
+            "0-4294967295",
+            "8,",
+            "-3",
+            "1-2-3",
+        ] {
+            assert_eq!(strict_cpulist(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn a_c_string_never_cuts_a_utf8_character() {
