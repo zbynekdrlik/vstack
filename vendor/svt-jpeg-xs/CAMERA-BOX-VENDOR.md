@@ -10,13 +10,19 @@
   verbatim. Not imported: the apps (`Source/App`), tests, googletest, docs, the ffmpeg/MTL plugins
   and the `Build`/`Bin` dirs. The top `CMakeLists.txt` reaches them only behind `BUILD_APPS`,
   `BUILD_TESTING` and `JPEGXS_PGO`, all forced OFF by `jxs/sys/csrc/CMakeLists.txt`.
-- **One local patch** (issue 1387, live 31.10.2026): `Source/Lib/Common/Codec/Threads/SvtThreads.c`
+- **Local patch: realtime policy** (issue 1387, live 31.10.2026): `Source/Lib/Common/Codec/Threads/SvtThreads.c`
   `svt_jxs_create_thread` no longer calls `pthread_setschedparam(..., SCHED_FIFO, 99)` when the
   process runs as root. camera-box runs as root, so upstream's block put the encoder workers ABOVE
   the capture thread (SCHED_FIFO 90) on the encoder cores; a worker now keeps its creator's
   scheduling (SCHED_OTHER, or the opt-in `CAMERA_BOX_JXS_FIFO_PRIO`). Pinned by
   `tests/jxs_wiring_1387.rs` `the_vendored_codec_never_raises_its_workers_to_a_realtime_policy`.
   Re-apply it after every update (step 1 below copies upstream verbatim).
+- **Thread names** (vstack#30, 21.11.2026): `SvtThreads.c` / `SvtThreads.h`. On Linux,
+  `SVT_CREATE_THREAD` passes its stage function's name to `svt_jxs_create_named_thread`, and every
+  library thread names itself after it: `jxe-init`, `jxe-dwt`, `jxe-pack`, `jxe-final` (encoder),
+  `jxd-init`, `jxd-work`, `jxd-final` (decoder), else `jxs-worker`. Unnamed, the threads read as
+  their process (`obs`) on strih-snv, and a start-up stall could not be placed. Pinned by
+  `jxs/sys/tests/thread_names.rs`. Re-apply it after every update.
 - **Built by** `jxs/sys/build.rs`: static, Release, no LTO, no `-march=native`, outputs in cargo's
   `OUT_DIR` (never in this tree). Needs cmake >= 3.10, a C compiler and nasm >= 2.14 (`ASM_NASM`
   names one that is not on PATH).

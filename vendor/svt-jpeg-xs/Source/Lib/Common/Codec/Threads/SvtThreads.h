@@ -29,6 +29,12 @@ extern "C" {
      * Threads
      **************************************/
 extern Handle_t svt_jxs_create_thread(void *(*thread_function)(void *), void *thread_context);
+/* camera-box local patch (vstack#30): a thread named after its stage function (Linux only). */
+extern Handle_t svt_jxs_create_named_thread(void *(*thread_function)(void *), void *thread_context, const char *name);
+#if defined(__linux__)
+/* The thread name a stage function's name maps to: "jxe-*" encoder, "jxd-*" decoder. */
+extern const char *svt_jxs_thread_short_name(const char *stage);
+#endif
 
 extern SvtJxsErrorType_t svt_jxs_destroy_thread(Handle_t thread_handle);
 
@@ -105,7 +111,7 @@ extern SvtJxsErrorType_t svt_jxs_destroy_mutex(Handle_t mutex_handle);
 #if defined(__linux__)
 #define SVT_CREATE_THREAD(pointer, thread_function, thread_context)   \
     do {                                                              \
-        pointer = svt_jxs_create_thread(thread_function, thread_context); \
+        pointer = svt_jxs_create_named_thread(thread_function, thread_context, #thread_function); \
         SVT_ADD_MEM(pointer, 1, POINTER_TYPE_THREAD);                 \
     } while (0)
 #else
