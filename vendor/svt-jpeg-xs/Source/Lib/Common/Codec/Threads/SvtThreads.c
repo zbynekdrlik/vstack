@@ -212,6 +212,33 @@ typedef struct SvtJxsThreadStart {
     void *thread_context;
 } SvtJxsThreadStart;
 
+/* camera-box local patch (vstack#30, CAMERA-BOX-VENDOR.md): every library thread carries a name
+ * that tells the encoder (jxe-) from the decoder (jxd-) and its stage, so a host's thread list
+ * (ps -L, top -H) shows where the codec runs; unnamed, they all read as their process. The
+ * creator names it right after pthread_create, so it carries its name once the open returns. */
+const char *svt_jxs_thread_short_name(const char *stage) {
+    static const struct {
+        const char *stage;
+        const char *name;
+    } names[] = {
+        {"init_stage_kernel", "jxe-init"},
+        {"dwt_stage_kernel", "jxe-dwt"},
+        {"pack_stage_kernel", "jxe-pack"},
+        {"final_stage_kernel", "jxe-final"},
+        {"thread_init_stage_kernel", "jxd-init"},
+        {"thread_universal_stage_kernel", "jxd-work"},
+        {"thread_final_stage_kernel", "jxd-final"},
+    };
+    if (stage != NULL) {
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            if (strcmp(stage, names[i].stage) == 0) {
+                return names[i].name;
+            }
+        }
+    }
+    return "jxs-worker";
+}
+
 static void *svt_jxs_thread_start(void *arg) {
     SvtJxsThreadStart start = *(SvtJxsThreadStart *)arg;
     free(arg);
@@ -224,7 +251,12 @@ static void *svt_jxs_thread_start(void *arg) {
  * svt_jxs_create_thread
  ****************************************/
 Handle_t svt_jxs_create_thread(void *(*thread_function)(void *), void *thread_context) {
+    return svt_jxs_create_named_thread(thread_function, thread_context, NULL);
+}
+
+Handle_t svt_jxs_create_named_thread(void *(*thread_function)(void *), void *thread_context, const char *name) {
     Handle_t thread_handle = NULL;
+    (void)name;
 
 #ifdef _WIN32
 
@@ -294,6 +326,10 @@ Handle_t svt_jxs_create_thread(void *(*thread_function)(void *), void *thread_co
     }
 
     pthread_attr_destroy(&attr);
+#if defined(__linux__)
+    /* a name is a label only: a failure changes nothing */
+    (void)pthread_setname_np(*th, svt_jxs_thread_short_name(name));
+#endif
 
     /* camera-box local patch (issue 1387, CAMERA-BOX-VENDOR.md): upstream raised every worker to
      * SCHED_FIFO 99 here whenever the process ran as root. camera-box runs as root, so its encoder
