@@ -98,7 +98,11 @@ uint16_t cbjxs_local_port(const cbjxs_receiver *rx);
 /* Wait up to timeout_ms for the next decoded frame.
  * 1 = *out filled, 0 = none in time, -1 = a socket error (cbjxs_take_error names it; close and
  * reopen), -2 = a NULL argument or an internal failure (a panic inside the library: the receiver
- * is unusable from then on; close it). */
+ * is unusable from then on; close it).
+ * A lost slice is concealed with the same slice of the last good picture, so every frame returned
+ * is whole: no region is ever left black or zero. A frame that cannot be concealed (a lost slice
+ * with no earlier picture, a corrupt slice) is never returned; the caller keeps showing its last
+ * picture. lost_slices counts the concealed slices. */
 int cbjxs_next_frame(cbjxs_receiver *rx, uint32_t timeout_ms, cbjxs_frame *out);
 
 /* Change the highest bpp this receiver takes (0 = no limit). The next report carries it; the

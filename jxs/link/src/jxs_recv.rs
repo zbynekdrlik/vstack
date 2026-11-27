@@ -615,6 +615,118 @@ mod tests {
         packets
     }
 
+    /// The packets of one 256x64 frame whose luma is `luma` everywhere (header + 4 slices of 16
+    /// lines: packet `i` > 0 carries rows `16 * (i - 1)..16 * i`).
+    #[cfg(feature = "jxs")]
+    fn flat_frame(luma: u8) -> Vec<Option<Vec<u8>>> {
+        use svt_jpegxs_sys::{Encoder, EncoderSettings};
+        let mut enc = Encoder::open(EncoderSettings::issue_1387(256, 64)).expect("encoder");
+        let (y, u, v) = enc.planes_mut().planes_mut();
+        y.fill(luma);
+        u.fill(128);
+        v.fill(128);
+        let mut packets = Vec::new();
+        enc.encode_frame(|_, b, _| packets.push(Some(b.to_vec())))
+            .expect("encode");
+        packets
+    }
+
+    /// The mean luma of rows `rows` of each delivered frame (`None` = not delivered).
+    #[cfg(feature = "jxs")]
+    fn row_means(
+        frames: &[Vec<Option<Vec<u8>>>],
+        rows: std::ops::Range<usize>,
+    ) -> Vec<Option<(f64, f64)>> {
+        use crate::jxs_link::{FrameReport, SliceSink};
+        let mut out = Vec::new();
+        let mut sink = DecodeSink::new(
+            |_: &FrameReport, p: Option<&svt_jpegxs_sys::YuvPlanes>, _: bool| {
+                out.push(p.map(|p| {
+                    let w = p.width() as usize;
+                    let mean = |r: std::ops::Range<usize>| {
+                        let n = (r.len() * w) as f64;
+                        p.y()[r.start * w..r.end * w]
+                            .iter()
+                            .map(|&b| b as f64)
+                            .sum::<f64>()
+                            / n
+                    };
+                    (mean(rows.clone()), mean(0..16))
+                }))
+            },
+        );
+        for (k, f) in frames.iter().enumerate() {
+            let tc = 333_333 * (k as u64 + 1);
+            let n = f.len() as u8;
+            for (i, p) in f.iter().enumerate() {
+                sink.packet(tc, i as u8, n, p.as_deref());
+            }
+            sink.frame_done(&FrameReport {
+                timecode: tc,
+                camera_id: 1,
+                slice_count: n,
+                lost_slices: f.iter().filter(|p| p.is_none()).count() as u32,
+                first_arrival: 0,
+                last_arrival: 0,
+            });
+        }
+        drop(sink);
+        out
+    }
+
+    /// camera-box (owner report, 27.11.2026): an operator saw a black band in the stream program
+    /// during losses. A lost slice must show the previous picture's slice, never black or zero:
+    /// with the decoder open, after a lost picture header, and in the first frame of a decoder
+    /// reopened after a corrupt slice. A frame that cannot be concealed is not delivered at all.
+    #[cfg(feature = "jxs")]
+    #[test]
+    fn a_lost_slice_shows_the_previous_pictures_slice_never_black() {
+        let (bright, dark) = (flat_frame(200), flat_frame(60));
+        let near = |v: f64, want: f64| (v - want).abs() < 12.0;
+        // rows 16..32 travel in packet 2
+        let mut lost_slice = dark.clone();
+        lost_slice[2] = None;
+        let mut lost_header = dark.clone();
+        lost_header[0] = None;
+        let mut corrupt = dark.clone();
+        let half = corrupt[3].as_ref().unwrap().len() / 2;
+        corrupt[3].as_mut().unwrap().truncate(half);
+        let out = row_means(
+            &[
+                bright.clone(),
+                lost_slice.clone(),
+                lost_header,
+                corrupt,
+                lost_slice,
+            ],
+            16..32,
+        );
+        assert_eq!(out.len(), 5);
+        let (band, top) = out[0].expect("the first frame");
+        assert!(near(band, 200.0) && near(top, 200.0), "{out:?}");
+        // decoder open: the lost rows are the bright picture's, the rest is the dark one (the
+        // vertical wavelet spans the slice edge, so the concealed band blends a little with its
+        // neighbours: 187 and 73 measured -- still the previous picture, never black)
+        let (band, top) = out[1].expect("concealed, delivered");
+        assert!(
+            band > 170.0,
+            "lost rows read {band}, want the previous 200: {out:?}"
+        );
+        assert!((top - 60.0).abs() < 20.0, "{out:?}");
+        // a lost picture header is concealed from the previous one: the whole frame decodes
+        let (band, top) = out[2].expect("header concealed, delivered");
+        assert!(near(band, 60.0) && near(top, 60.0), "{out:?}");
+        // a corrupt slice: that frame is not delivered (the caller keeps its last picture) ...
+        assert_eq!(out[3], None, "{out:?}");
+        // ... and the reopened decoder's first frame conceals its lost slice from the last good
+        // picture's slice (the dark one of frame 2), never black
+        let (band, top) = out[4].expect("reopened, concealed, delivered");
+        assert!(near(band, 60.0) && near(top, 60.0), "{out:?}");
+        for (band, top) in out.iter().flatten() {
+            assert!(*band > 30.0 && *top > 30.0, "a black region: {out:?}");
+        }
+    }
+
     #[cfg(feature = "jxs")]
     #[test]
     fn a_first_frame_that_cannot_open_is_an_error_and_the_next_whole_one_opens() {
