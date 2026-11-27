@@ -19,7 +19,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "av-capture"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "rig-core",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "av-ndi"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "av-capture",
@@ -77,11 +77,11 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "burn-geom"
-version = "0.1.21"
+version = "0.1.22"
 
 [[package]]
 name = "camera-box-jxs"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "libc",
  "rig-core",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "jxs-recv-ffi"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "camera-box-jxs",
  "jxs-send-ffi",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "jxs-send-ffi"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "camera-box-jxs",
  "rig-core",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "qpsk-marker"
-version = "0.1.21"
+version = "0.1.22"
 
 [[package]]
 name = "quote"
@@ -375,7 +375,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rig-core"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "libc",
  "tracing",
@@ -442,7 +442,7 @@ checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
 name = "svt-jpegxs-sys"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "cmake",
 ]
