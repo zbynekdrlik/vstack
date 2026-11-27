@@ -631,6 +631,63 @@ mod tests {
         packets
     }
 
+    /// obs (stream-pp 27.11.2026): the only frames with lost slices sat right after a bpp step
+    /// (8 -> 5) with decoder reopens. Across a bpp change a lost picture header is concealed with
+    /// the OLD bpp's header and a lost slice with the old bpp's slice: the frame still decodes,
+    /// the header's rows at the new picture, the concealed slice's rows at the previous picture,
+    /// never black. A later loss at the new bpp conceals from the new bpp's own slices.
+    #[cfg(feature = "jxs")]
+    #[test]
+    fn a_loss_across_a_bpp_change_is_concealed_never_black() {
+        use svt_jpegxs_sys::{Encoder, EncoderSettings};
+        let frame = |luma: u8, bpp: u32| {
+            let mut s = EncoderSettings::issue_1387(256, 64);
+            s.bpp_numerator = bpp;
+            let mut enc = Encoder::open(s).expect("encoder");
+            let (y, u, v) = enc.planes_mut().planes_mut();
+            for (i, b) in y.iter_mut().enumerate() {
+                *b = luma.wrapping_add((i % 37) as u8);
+            }
+            u.fill(128);
+            v.fill(128);
+            let mut packets = Vec::new();
+            enc.encode_frame(|_, b, _| packets.push(Some(b.to_vec())))
+                .expect("encode");
+            packets
+        };
+        // pictures of mean luma ~168 at bpp 8 and ~78 at bpp 5
+        let (old, new) = (frame(150, 8), frame(60, 5));
+        let mut lost_header_and_slice = new.clone();
+        lost_header_and_slice[0] = None;
+        lost_header_and_slice[2] = None;
+        let mut lost_slice = new.clone();
+        lost_slice[3] = None;
+        let frames = [old.clone(), lost_header_and_slice, new, lost_slice];
+        let near = |v: f64, want: f64| (v - want).abs() < 12.0;
+        let bands: Vec<Vec<f64>> = [0..16, 16..32, 32..48, 48..64]
+            .into_iter()
+            .map(|rows| {
+                row_means(&frames, rows)
+                    .into_iter()
+                    .map(|m| m.expect("every frame is delivered").0)
+                    .collect()
+            })
+            .collect();
+        // frame 1: rows 16..32 (its lost slice) show the old picture, the rest the new one
+        assert!(near(bands[1][1], 168.0), "{bands:?}");
+        for b in [0, 2, 3] {
+            assert!(near(bands[b][1], 78.0), "{bands:?}");
+        }
+        // frame 3: its lost rows 32..48 come from the new bpp's frame 2
+        for b in 0..4 {
+            assert!(near(bands[b][3], 78.0), "{bands:?}");
+        }
+        assert!(
+            bands.iter().flatten().all(|&m| m > 30.0),
+            "a black band: {bands:?}"
+        );
+    }
+
     /// The mean luma of rows `rows` of each delivered frame (`None` = not delivered).
     #[cfg(feature = "jxs")]
     fn row_means(
